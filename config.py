@@ -16,7 +16,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # Pipeline limits (from project-overview: file size threshold)
-MAX_FILE_SIZE_MB = 100
+MAX_FILE_SIZE_MB = 1024  # 1 GB
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".mp4"}
 

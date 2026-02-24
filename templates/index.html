@@ -252,6 +252,39 @@
     @keyframes pulse { 50% { opacity: 0.7; } }
     .step .label { font-weight: 500; }
     .step .msg { font-size: 0.85rem; color: var(--text-muted); margin-left: auto; }
+    .step-content {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      flex: 1;
+    }
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .step-progress-container {
+      width: 100%;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .step-progress-bar {
+      height: 100%;
+      background: var(--accent);
+      transition: width 0.3s ease;
+      border-radius: 3px;
+    }
+    .step-progress-info {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+    .step-eta {
+      font-family: 'JetBrains Mono', monospace;
+    }
     .result-block {
       margin-top: 1rem;
       padding: 1rem;
@@ -323,7 +356,7 @@
     <div class="upload-zone" id="uploadZone">
       <input type="file" id="fileInput" accept=".mp3,.wav,.mp4" multiple />
       <label>Choose files</label>
-      <p>or drag and drop one or more files (max 100 MB each)</p>
+      <p>or drag and drop one or more files (max 1 GB each)</p>
       <p class="upload-progress" id="uploadProgress">Uploading…</p>
     </div>
 
@@ -593,7 +626,7 @@
           btn.addEventListener('click', (e) => { e.stopPropagation(); removeJob(btn.dataset.jobId); });
         });
 
-        if (selectedJobId) showDetail(selectedJobId);
+        if (selectedJobId) showDetail(selectedJobId, false);
       } catch (_) {}
     }
 
@@ -649,12 +682,122 @@
     function startPolling() {
       if (pollTimer) clearInterval(pollTimer);
       pollTimer = setInterval(() => {
-        refreshQueue();
+        // Only refresh queue list, not the detail panel (to preserve audio)
+        refreshQueueListOnly();
+        // If a job is selected, update its detail with audio preservation
+        if (selectedJobId) {
+          showDetail(selectedJobId, true);
+        }
       }, 1500);
     }
+    
+    async function refreshQueueListOnly() {
+      // Only update the job list, not the detail panel
+      try {
+        const r = await fetch(API + '/api/queue');
+        const q = await r.json();
+        const paused = q.paused === true;
+        btnPause.style.display = paused ? 'none' : 'inline-block';
+        btnResume.style.display = paused ? 'inline-block' : 'none';
+        pausedBadge.style.display = paused ? 'inline' : 'none';
 
-    async function showDetail(jobId) {
+        const allPending = q.pending || [];
+        const pending = allPending.filter(x => x.status === 'pending');
+        const currentId = q.current_job_id || null;
+        const jobs = q.jobs || [];
+        const parts = [];
+
+        if (paused && (pending.length || currentId)) {
+          parts.push('<p class="warning-msg">Queue is paused. Resume to process pending files.</p>');
+        }
+
+        pending.forEach(item => {
+          parts.push(`
+            <div class="job-card pending-item" data-queue-id="${escapeHtml(item.queue_id)}">
+              <div>
+                <div class="name">${escapeHtml(item.original_filename || '')}</div>
+                <div class="meta">Queued (pending)</div>
+              </div>
+              <div class="actions">
+                <button type="button" class="btn-remove-pending" data-queue-id="${escapeHtml(item.queue_id)}">Remove</button>
+              </div>
+            </div>
+          `);
+        });
+
+        if (currentId) {
+          const j = jobs.find(x => x.job_id === currentId) || { job_id: currentId, original_filename: 'Processing...', status: 'running' };
+          parts.push(`
+            <div class="job-card ${j.job_id === selectedJobId ? 'active' : ''}" data-job-id="${j.job_id}">
+              <div style="cursor:pointer;" class="job-card-click">
+                <div class="name">${escapeHtml(j.original_filename || j.job_id)}</div>
+                <div class="meta">${j.job_id}</div>
+              </div>
+              <div class="actions">
+                <span class="badge running">running</span>
+                <button type="button" class="btn-cancel-job" data-job-id="${j.job_id}">Cancel</button>
+              </div>
+            </div>
+          `);
+        }
+
+        jobs.forEach(j => {
+          if (j.job_id === currentId) return;
+          const isDone = j.status === 'completed' || j.status === 'failed' || j.status === 'cancelled';
+          parts.push(`
+            <div class="job-card ${j.job_id === selectedJobId ? 'active' : ''}" data-job-id="${j.job_id}">
+              <div style="cursor:pointer;" class="job-card-click">
+                <div class="name">${escapeHtml(j.original_filename || j.job_id)}</div>
+                <div class="meta">${j.job_id}</div>
+              </div>
+              <div class="actions">
+                <span class="badge ${j.status}">${j.status}</span>
+                ${isDone ? `<button type="button" class="btn-remove-job" data-job-id="${j.job_id}">Remove</button>` : ''}
+              </div>
+            </div>
+          `);
+        });
+
+        jobList.innerHTML = parts.length === 0
+          ? '<p class="empty">No items in queue. Upload files above.</p>'
+          : parts.join('');
+
+        jobList.querySelectorAll('.job-card-click').forEach(el => {
+          el.addEventListener('click', (e) => {
+            if (e.target.closest('button')) return;
+            const card = el.closest('.job-card');
+            if (card && card.dataset.jobId) {
+              selectedJobId = card.dataset.jobId;
+              showDetail(selectedJobId);
+            }
+          });
+        });
+        jobList.querySelectorAll('.btn-remove-pending').forEach(btn => {
+          btn.addEventListener('click', (e) => { e.stopPropagation(); removePending(btn.dataset.queueId); });
+        });
+        jobList.querySelectorAll('.btn-cancel-job').forEach(btn => {
+          btn.addEventListener('click', (e) => { e.stopPropagation(); cancelJob(btn.dataset.jobId); });
+        });
+        jobList.querySelectorAll('.btn-remove-job').forEach(btn => {
+          btn.addEventListener('click', (e) => { e.stopPropagation(); removeJob(btn.dataset.jobId); });
+        });
+      } catch (_) {}
+    }
+
+    async function showDetail(jobId, preserveAudio = false) {
       detailPanel.style.display = 'block';
+      // Preserve audio playback state if requested
+      let audioState = null;
+      if (preserveAudio) {
+        const audioEl = document.getElementById('jobAudio');
+        if (audioEl) {
+          audioState = {
+            currentTime: audioEl.currentTime,
+            paused: audioEl.paused,
+            volume: audioEl.volume,
+          };
+        }
+      }
       try {
         const r = await fetch(API + '/api/status/' + encodeURIComponent(jobId));
         const data = await r.json();
@@ -663,11 +806,38 @@
           const s = data.steps?.[id] || {};
           const status = s.status || 'pending';
           const icon = status === 'running' ? '…' : status === 'completed' ? '✓' : status === 'failed' ? '✕' : '○';
+          const progress = s.progress || 0;
+          const etaSeconds = s.eta_seconds;
+          let etaText = '';
+          if (etaSeconds !== null && etaSeconds !== undefined && status === 'running') {
+            if (etaSeconds < 60) {
+              etaText = `${Math.round(etaSeconds)}s`;
+            } else if (etaSeconds < 3600) {
+              etaText = `${Math.round(etaSeconds / 60)}m`;
+            } else {
+              const hours = Math.floor(etaSeconds / 3600);
+              const minutes = Math.round((etaSeconds % 3600) / 60);
+              etaText = `${hours}h ${minutes}m`;
+            }
+          }
           return `
             <div class="step">
               <span class="icon ${status}">${icon}</span>
-              <span class="label">${escapeHtml(s.name || id)}</span>
-              <span class="msg">${escapeHtml(s.message || '')} ${s.detail ? '· ' + escapeHtml(s.detail) : ''}</span>
+              <div class="step-content">
+                <div class="step-header">
+                  <span class="label">${escapeHtml(s.name || id)}</span>
+                  <span class="msg">${escapeHtml(s.message || '')} ${s.detail ? '· ' + escapeHtml(s.detail) : ''}</span>
+                </div>
+                ${status === 'running' || status === 'completed' ? `
+                  <div class="step-progress-container">
+                    <div class="step-progress-bar" style="width: ${progress}%"></div>
+                  </div>
+                  <div class="step-progress-info">
+                    <span>${Math.round(progress)}%</span>
+                    ${etaText ? `<span class="step-eta">ETA: ${etaText}</span>` : ''}
+                  </div>
+                ` : ''}
+              </div>
             </div>
           `;
         }).join('');
@@ -687,13 +857,16 @@
 
         // Step 1: Preprocessed audio (show as soon as preprocess completes)
         if (preprocessDone) {
-          parts.push(`
-            <div class="result-block">
-              <h4>Preprocessed audio</h4>
-              <p class="value" style="margin:0;">Play the normalized WAV from the Preprocess step.</p>
-              <audio id="jobAudio" controls preload="metadata" src="${API}/api/audio/${encodeURIComponent(jobId)}"></audio>
-            </div>
-          `);
+          const audioExists = document.getElementById('jobAudio');
+          if (!audioExists) {
+            parts.push(`
+              <div class="result-block">
+                <h4>Preprocessed audio</h4>
+                <p class="value" style="margin:0;">Play the normalized WAV from the Preprocess step.</p>
+                <audio id="jobAudio" controls preload="metadata" src="${API}/api/audio/${encodeURIComponent(jobId)}"></audio>
+              </div>
+            `);
+          }
         }
 
         // Step 2: Transcription with clickable timestamps (show when transcribe completes)
@@ -743,7 +916,11 @@
         if (parts.length === 0) {
           resultArea.innerHTML = '<p class="empty">Results will appear here as each step completes.</p>';
         } else {
-          resultArea.innerHTML = parts.join('');
+          // Only update resultArea if it changed or if we're not preserving audio
+          const newResultHtml = parts.join('');
+          if (!preserveAudio || resultArea.innerHTML !== newResultHtml) {
+            resultArea.innerHTML = newResultHtml;
+          }
           // Attach click handlers for timestamp links (seek and play)
           const audioEl = document.getElementById('jobAudio');
           resultArea.querySelectorAll('.timestamp-link').forEach(link => {
@@ -756,6 +933,18 @@
               }
             });
           });
+        }
+        
+        // Restore audio state if we preserved it
+        if (preserveAudio && audioState) {
+          const audioEl = document.getElementById('jobAudio');
+          if (audioEl) {
+            audioEl.currentTime = audioState.currentTime;
+            audioEl.volume = audioState.volume;
+            if (!audioState.paused) {
+              audioEl.play().catch(() => {});
+            }
+          }
         }
       } catch (_) {
         resultArea.innerHTML = '<p class="error-msg">Could not load job.</p>';

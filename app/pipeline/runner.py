@@ -32,6 +32,9 @@ class StepState:
     status: StepStatus = StepStatus.PENDING
     message: str = ""
     detail: str = ""
+    progress: float = 0.0  # 0.0 to 100.0
+    eta_seconds: float | None = None  # Estimated time remaining in seconds
+    start_time: float | None = None  # When step started (for ETA calculation)
 
 
 @dataclass
@@ -52,7 +55,14 @@ class PipelineState:
             "original_filename": self.original_filename,
             "status": self.status,
             "steps": {
-                k: {"name": v.name, "status": v.status.value, "message": v.message, "detail": v.detail}
+                k: {
+                    "name": v.name,
+                    "status": v.status.value,
+                    "message": v.message,
+                    "detail": v.detail,
+                    "progress": v.progress,
+                    "eta_seconds": v.eta_seconds,
+                }
                 for k, v in self.steps.items()
             },
             "result": self.result,
@@ -83,6 +93,9 @@ class PipelineState:
                     status=step_status,
                     message=v.get("message", ""),
                     detail=v.get("detail", ""),
+                    progress=v.get("progress", 0.0),
+                    eta_seconds=v.get("eta_seconds"),
+                    start_time=v.get("start_time"),
                 )
         fid = d.get("folder_id")
         if fid is not None:
@@ -417,27 +430,47 @@ def run_pipeline(
         with _lock:
             return _jobs.get(job_id, state).cancelled
 
-    def set_step_running(step_id: str, message: str = ""):
-        state.steps[step_id].status = StepStatus.RUNNING
-        state.steps[step_id].message = message
+    def set_step_running(step_id: str, message: str = "", progress: float = 0.0, eta_seconds: float | None = None):
+        step = state.steps[step_id]
+        step.status = StepStatus.RUNNING
+        step.message = message
+        step.progress = max(0.0, min(100.0, progress))
+        step.eta_seconds = eta_seconds
+        if step.start_time is None:
+            step.start_time = time.perf_counter()
 
     def set_step_ok(step_id: str, detail: str = ""):
-        state.steps[step_id].status = StepStatus.COMPLETED
-        state.steps[step_id].message = "Done"
-        state.steps[step_id].detail = detail
+        step = state.steps[step_id]
+        step.status = StepStatus.COMPLETED
+        step.message = "Done"
+        step.detail = detail
+        step.progress = 100.0
+        step.eta_seconds = None
 
     def set_step_fail(step_id: str, err: str):
-        state.steps[step_id].status = StepStatus.FAILED
-        state.steps[step_id].message = "Failed"
-        state.steps[step_id].detail = str(err)
+        step = state.steps[step_id]
+        step.status = StepStatus.FAILED
+        step.message = "Failed"
+        step.detail = str(err)
+        step.progress = 0.0
+        step.eta_seconds = None
 
     try:
         if is_cancelled():
             state.status = "cancelled"
             state.error = "Cancelled by user"
             return job_id
-        set_step_running("preprocess")
-        preprocess(ctx, on_progress=lambda msg: set_step_running("preprocess", msg))
+        
+        # Preprocess step
+        set_step_running("preprocess", "Starting...", 0.0, None)
+        preprocess_start = time.perf_counter()
+        def preprocess_progress(msg: str, progress: float = 0.0):
+            elapsed = time.perf_counter() - preprocess_start
+            eta = None
+            if progress > 0 and progress < 100:
+                eta = (elapsed / progress) * (100 - progress)
+            set_step_running("preprocess", msg, progress, eta)
+        preprocess(ctx, on_progress=preprocess_progress)
         if is_cancelled():
             state.status = "cancelled"
             state.error = "Cancelled by user"
@@ -449,8 +482,17 @@ def run_pipeline(
             state.status = "cancelled"
             state.error = "Cancelled by user"
             return job_id
-        set_step_running("transcribe")
-        transcribe(ctx, on_progress=lambda msg: set_step_running("transcribe", msg), is_cancelled=is_cancelled)
+        
+        # Transcribe step
+        set_step_running("transcribe", "Starting...", 0.0, None)
+        transcribe_start = time.perf_counter()
+        def transcribe_progress(msg: str, progress: float = 0.0):
+            elapsed = time.perf_counter() - transcribe_start
+            eta = None
+            if progress > 0 and progress < 100:
+                eta = (elapsed / progress) * (100 - progress)
+            set_step_running("transcribe", msg, progress, eta)
+        transcribe(ctx, on_progress=transcribe_progress, is_cancelled=is_cancelled)
         if is_cancelled():
             state.status = "cancelled"
             state.error = "Cancelled by user"
@@ -463,8 +505,17 @@ def run_pipeline(
             state.status = "cancelled"
             state.error = "Cancelled by user"
             return job_id
-        set_step_running("analyze")
-        analyze_llm(ctx, on_progress=lambda msg: set_step_running("analyze", msg), is_cancelled=is_cancelled)
+        
+        # Analyze step
+        set_step_running("analyze", "Starting...", 0.0, None)
+        analyze_start = time.perf_counter()
+        def analyze_progress(msg: str, progress: float = 0.0):
+            elapsed = time.perf_counter() - analyze_start
+            eta = None
+            if progress > 0 and progress < 100:
+                eta = (elapsed / progress) * (100 - progress)
+            set_step_running("analyze", msg, progress, eta)
+        analyze_llm(ctx, on_progress=analyze_progress, is_cancelled=is_cancelled)
         if is_cancelled():
             state.status = "cancelled"
             state.error = "Cancelled by user"

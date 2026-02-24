@@ -175,7 +175,7 @@ def preprocess(ctx: PipelineContext, on_progress: callable = None) -> None:
     out_path = OUTPUT_DIR / f"{ctx.job_id}_audio.wav"
 
     if on_progress:
-        on_progress("Loading file...")
+        on_progress("Loading file...", 10.0)
 
     # .mp3 and .mp4 need ffmpeg/ffprobe (pydub uses them)
     if suffix in (".mp3", ".mp4"):
@@ -203,10 +203,14 @@ def preprocess(ctx: PipelineContext, on_progress: callable = None) -> None:
         raise
 
     if on_progress:
-        on_progress("Normalizing...")
+        on_progress("Normalizing...", 50.0)
     audio = normalize(audio)
+    if on_progress:
+        on_progress("Exporting WAV...", 80.0)
     audio.export(str(out_path), format="wav")
     ctx.audio_path = out_path
+    if on_progress:
+        on_progress("Done", 100.0)
 
 
 def _merge_segments_by_min_words(chunks: list, min_words: int = 10) -> list[dict]:
@@ -275,7 +279,7 @@ def transcribe(ctx: PipelineContext, on_progress: callable = None, is_cancelled:
     if is_cancelled and is_cancelled():
         return
     if on_progress:
-        on_progress("Loading Whisper model...")
+        on_progress("Loading Whisper model...", 5.0)
     step_log = logging.getLogger("audio_pipeline.runner")
     step_log.info("Transcribe: loading Whisper model %s (first job only, not on page load)...", WHISPER_MODEL_NAME)
     t0 = time.perf_counter()
@@ -288,15 +292,19 @@ def transcribe(ctx: PipelineContext, on_progress: callable = None, is_cancelled:
         generate_kwargs={"language": "en", "task": "transcribe"},
     )
     step_log.info("Transcribe: Whisper model loaded in %.3fs", time.perf_counter() - t0)
+    if on_progress:
+        on_progress("Model loaded", 30.0)
 
     if is_cancelled and is_cancelled():
         return
     if on_progress:
-        on_progress("Transcribing...")
+        on_progress("Transcribing audio...", 40.0)
     # Pipeline accepts file path; returns {"text": ..., "chunks": [{"timestamp": (start, end), "text": ...}]}
     result = pipe(str(ctx.audio_path), return_timestamps=True)
     if is_cancelled and is_cancelled():
         return
+    if on_progress:
+        on_progress("Processing transcription...", 90.0)
     text = result.get("text") or ""
     chunks = result.get("chunks") or []
     pipe = None  # free GPU
@@ -304,6 +312,8 @@ def transcribe(ctx: PipelineContext, on_progress: callable = None, is_cancelled:
     ctx.transcription = text.strip()
     # Merge chunks so each segment has at least MIN_WORDS_PER_SEGMENT; join with commas (pause boundaries)
     ctx.timestamps = _merge_segments_by_min_words(chunks, min_words=10)
+    if on_progress:
+        on_progress("Done", 100.0)
 
 
 # Cached Hugging Face LLM (loaded once per process)
@@ -412,14 +422,14 @@ def analyze_llm(ctx: PipelineContext, on_progress: callable = None, is_cancelled
         if is_cancelled and is_cancelled():
             return
         if on_progress:
-            on_progress("Extracting main topic...")
+            on_progress("Extracting main topic...", 20.0)
         ctx.main_topic = _generate(
             PROMPT_MAIN_TOPIC.format(transcription=text), model, tokenizer, device, max_new_tokens=128
         )
         if is_cancelled and is_cancelled():
             return
         if on_progress:
-            on_progress("Extracting subtopics...")
+            on_progress("Extracting subtopics...", 50.0)
         raw_sub = _generate(
             PROMPT_SUBTOPICS.format(main_topic=ctx.main_topic, transcription=text),
             model, tokenizer, device, max_new_tokens=256,
@@ -428,23 +438,26 @@ def analyze_llm(ctx: PipelineContext, on_progress: callable = None, is_cancelled
         if is_cancelled and is_cancelled():
             return
         if on_progress:
-            on_progress("Extracting truth statements...")
+            on_progress("Extracting truth statements...", 75.0)
         ctx.truth_statements_md = _generate(
             PROMPT_TRUTH_STATEMENTS.format(transcription=text), model, tokenizer, device, max_new_tokens=1024
         )
+        if on_progress:
+            on_progress("Done", 100.0)
         return
 
     # Long transcript: chunked path — subtopics per chunk → merge → main topic from subtopics → truth per chunk → merge
     chunks = _chunk_transcript(tokenizer, text, LLM_CHUNK_TRANSCRIPT_TOKENS)
     n_chunks = len(chunks)
 
-    # Subtopics per chunk
+    # Subtopics per chunk (0-30%)
     subtopic_lists: list[list[str]] = []
     for i, chunk in enumerate(chunks):
         if is_cancelled and is_cancelled():
             return
+        progress = 5.0 + (i / n_chunks) * 25.0
         if on_progress:
-            on_progress(f"Extracting subtopics (chunk {i + 1}/{n_chunks})...")
+            on_progress(f"Extracting subtopics (chunk {i + 1}/{n_chunks})...", progress)
         raw_sub = _generate(
             PROMPT_SUBTOPICS_CHUNK.format(transcription=chunk), model, tokenizer, device, max_new_tokens=256
         )
@@ -453,24 +466,27 @@ def analyze_llm(ctx: PipelineContext, on_progress: callable = None, is_cancelled
 
     if is_cancelled and is_cancelled():
         return
-    # Main topic from merged subtopics
+    # Main topic from merged subtopics (30-35%)
     if on_progress:
-        on_progress("Composing main topic from subtopics...")
+        on_progress("Composing main topic from subtopics...", 32.0)
     subtopics_list = "\n".join(f"- {s}" for s in ctx.subtopics) if ctx.subtopics else "(None extracted)"
     ctx.main_topic = _generate(
         PROMPT_MAIN_TOPIC_FROM_SUBTOPICS.format(subtopics_list=subtopics_list),
         model, tokenizer, device, max_new_tokens=128,
     )
 
-    # Truth statements per chunk
+    # Truth statements per chunk (35-95%)
     truth_tables: list[str] = []
     for i, chunk in enumerate(chunks):
         if is_cancelled and is_cancelled():
             return
+        progress = 35.0 + (i / n_chunks) * 60.0
         if on_progress:
-            on_progress(f"Extracting truth statements (chunk {i + 1}/{n_chunks})...")
+            on_progress(f"Extracting truth statements (chunk {i + 1}/{n_chunks})...", progress)
         md = _generate(
             PROMPT_TRUTH_STATEMENTS.format(transcription=chunk), model, tokenizer, device, max_new_tokens=1024
         )
         truth_tables.append(md)
     ctx.truth_statements_md = _merge_dedup_truth_md(truth_tables)
+    if on_progress:
+        on_progress("Done", 100.0)

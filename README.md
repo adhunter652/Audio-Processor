@@ -68,7 +68,7 @@ Check: `ffmpeg -version` and `ffprobe -version` should run in a new terminal.
 
 ## Usage
 
-- **Upload**: Choose or drag-and-drop an `.mp3`, `.wav`, or `.mp4` file (max 100 MB). The pipeline runs in the background.
+- **Upload**: Choose or drag-and-drop an `.mp3`, `.wav`, or `.mp4` file (max 1 GB). The pipeline runs in the background.
 - **Jobs**: Each upload appears as a job with status `pending` → `running` → `completed` or `failed`.
 - **Status**: Click a job to see the three steps (Preprocess, Transcribe, Analyze) and their status/messages.
 - **Results**: When completed, the same panel shows transcription, main topic, sub-topics, key timestamps, and the truth-statements table.
@@ -97,5 +97,5 @@ Completed jobs are automatically indexed into both RAG databases. Override the e
 
 ## Constraints (from project-overview)
 
-- Max file size: 100 MB (configurable in `config.py`).
+- Max file size: 1 GB (configurable in `config.py`).
 - Supported formats: `.mp3`, `.wav`, `.mp4`.

@@ -1,0 +1,20 @@
+# Web server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+aiofiles>=23.2.1
+
+# Audio: Hugging Face model run locally (transformers loads distil-whisper natively)
+pydub>=0.25.1
+
+# LLM: Hugging Face transformers, run locally
+torch>=2.0.0
+transformers>=4.40.0
+accelerate>=0.27.0
+
+# RAG: local embeddings and vector store
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+
+# Environment
+python-dotenv>=1.0.0

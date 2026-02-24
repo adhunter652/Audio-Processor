@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Audio Processing Pipeline</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <noscript><link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
+  <style>
+    :root {
+      --bg: #0f0f12;
+      --surface: #18181c;
+      --border: #2a2a30;
+      --text: #e4e4e7;
+      --text-muted: #71717a;
+      --accent: #a78bfa;
+      --accent-dim: #7c3aed;
+      --success: #22c55e;
+      --warn: #eab308;
+      --error: #ef4444;
+      --radius: 10px;
+      --radius-sm: 6px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: 'DM Sans', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .layout {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+    }
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin: 0 0 0.5rem;
+      letter-spacing: -0.02em;
+    }
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      margin-bottom: 2rem;
+    }
+    .upload-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 2.5rem;
+      text-align: center;
+      background: var(--surface);
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .upload-zone.dragover { border-color: var(--accent); background: rgba(167, 139, 250, 0.06); }
+    .upload-zone input[type="file"] { display: none; }
+    .upload-zone label {
+      cursor: pointer;
+      display: inline-block;
+      padding: 0.6rem 1.2rem;
+      background: var(--accent);
+      color: #fff;
+      border-radius: var(--radius-sm);
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+    .upload-zone label:hover { background: var(--accent-dim); }
+    .upload-zone.uploading { pointer-events: none; opacity: 0.8; }
+    .upload-zone .upload-progress { display: none; margin-top: 0.5rem; font-size: 0.85rem; color: var(--accent); }
+    .upload-zone.uploading .upload-progress { display: block; }
+    .upload-zone p {
+      margin: 0.75rem 0 0;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+    .folder-upload-row { margin-bottom: 1rem; }
+    .folder-select-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .folder-select-wrap label {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+    .folder-select-wrap select {
+      padding: 0.5rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 0.9rem;
+      min-width: 180px;
+    }
+    .btn-sm {
+      padding: 0.4rem 0.8rem;
+      font-size: 0.85rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .btn-sm:hover { border-color: var(--accent); background: rgba(167, 139, 250, 0.08); }
+    .folders-section { margin-top: 2rem; }
+    .folders-section h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin: 0 0 0.5rem;
+      color: var(--text-muted);
+    }
+    .folders-section .text-muted { color: var(--text-muted); font-size: 0.85rem; margin: 0 0 0.75rem; }
+    .folder-list { display: flex; flex-direction: column; gap: 0.5rem; }
+    .folder-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.6rem 0.9rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    .folder-item .name { font-weight: 500; }
+    .folder-item .actions { display: flex; gap: 0.35rem; }
+    .folder-item .actions button {
+      padding: 0.2rem 0.5rem;
+      font-size: 0.75rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+    .folder-item .actions button:hover { color: var(--text); border-color: var(--accent); }
+    .folder-item .actions button.danger { border-color: var(--error); color: var(--error); }
+    .folder-item .actions button.danger:hover { background: rgba(239, 68, 68, 0.1); }
+    .jobs-section { margin-top: 2.5rem; }
+    .jobs-section h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin: 0 0 1rem;
+      color: var(--text-muted);
+    }
+    .job-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .job-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.85rem 1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .job-card:hover { border-color: var(--accent); background: rgba(167, 139, 250, 0.04); }
+    .job-card.active { border-color: var(--accent); background: rgba(167, 139, 250, 0.08); }
+    .job-card .name { font-weight: 500; }
+    .job-card .meta { font-size: 0.8rem; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+    .job-card .badge {
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.25rem 0.6rem;
+      border-radius: 999px;
+      text-transform: uppercase;
+    }
+    .badge.pending { background: var(--border); color: var(--text-muted); }
+    .badge.running { background: rgba(234, 179, 8, 0.2); color: var(--warn); }
+    .badge.completed { background: rgba(34, 197, 94, 0.2); color: var(--success); }
+    .badge.failed { background: rgba(239, 68, 68, 0.2); color: var(--error); }
+    .badge.cancelled { background: var(--border); color: var(--text-muted); }
+    .queue-controls {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+    .queue-controls button {
+      padding: 0.4rem 0.8rem;
+      border-radius: var(--radius-sm);
+      font-size: 0.85rem;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+    }
+    .queue-controls button:hover { border-color: var(--accent); background: rgba(167, 139, 250, 0.08); }
+    .queue-controls button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .queue-controls button.primary:hover { background: var(--accent-dim); }
+    .queue-controls button.danger { border-color: var(--error); color: var(--error); }
+    .queue-controls button.danger:hover { background: rgba(239, 68, 68, 0.1); }
+    .queue-controls .paused-badge { font-size: 0.8rem; color: var(--warn); }
+    .job-card .actions { display: flex; gap: 0.35rem; flex-shrink: 0; }
+    .job-card .actions button {
+      padding: 0.25rem 0.5rem;
+      font-size: 0.75rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+    .job-card .actions button:hover { color: var(--text); border-color: var(--accent); }
+    .warning-msg { font-size: 0.8rem; color: var(--warn); margin-top: 0.25rem; }
+    .detail-panel {
+      margin-top: 1.5rem;
+      padding: 1.25rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .detail-panel h3 { font-size: 1rem; margin: 0 0 0.75rem; font-weight: 600; }
+    .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .step {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .step:last-child { border-bottom: none; }
+    .step .icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      flex-shrink: 0;
+    }
+    .step .icon.pending { background: var(--border); color: var(--text-muted); }
+    .step .icon.running { background: var(--warn); color: #000; animation: pulse 1s ease infinite; }
+    .step .icon.completed { background: var(--success); color: #fff; }
+    .step .icon.failed { background: var(--error); color: #fff; }
+    @keyframes pulse { 50% { opacity: 0.7; } }
+    .step .label { font-weight: 500; }
+    .step .msg { font-size: 0.85rem; color: var(--text-muted); margin-left: auto; }
+    .result-block {
+      margin-top: 1rem;
+      padding: 1rem;
+      background: var(--bg);
+      border-radius: var(--radius-sm);
+      font-size: 0.9rem;
+    }
+    .result-block h4 {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin: 0 0 0.5rem;
+    }
+    .result-block + .result-block { margin-top: 0.75rem; }
+    .result-block .value { white-space: pre-wrap; word-break: break-word; }
+    .result-block ul { margin: 0.25rem 0 0; padding-left: 1.25rem; }
+    .result-block .md-table {
+      overflow-x: auto;
+      margin-top: 0.5rem;
+    }
+    .result-block table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    .result-block th, .result-block td {
+      text-align: left;
+      padding: 0.4rem 0.6rem;
+      border: 1px solid var(--border);
+    }
+    .result-block th { color: var(--text-muted); font-weight: 500; }
+    .error-msg { color: var(--error); margin-top: 0.5rem; }
+    .empty { color: var(--text-muted); font-style: italic; }
+    .timestamp-link {
+      cursor: pointer;
+      color: var(--accent);
+      text-decoration: none;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85em;
+      padding: 0.1rem 0.25rem;
+      border-radius: 3px;
+    }
+    .timestamp-link:hover { text-decoration: underline; background: rgba(167, 139, 250, 0.15); }
+    .transcription-segment { margin-bottom: 0.35rem; }
+    audio { width: 100%; max-width: 480px; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav style="margin-bottom: 1.5rem; display: flex; gap: 1rem; align-items: center;">
+      <a href="/" style="color: var(--accent); text-decoration: none; font-size: 0.9rem;">Pipeline</a>
+      <a href="/search/transcripts" style="color: var(--text-muted); text-decoration: none; font-size: 0.9rem;">Search transcripts</a>
+      <a href="/search/meetings" style="color: var(--text-muted); text-decoration: none; font-size: 0.9rem;">Search meetings</a>
+    </nav>
+    <h1>Audio Processing Pipeline</h1>
+    <p class="subtitle">Upload .mp3, .wav, or .mp4 to transcribe and extract main topic, subtopics, and truth statements.</p>
+
+    <div class="folder-upload-row">
+      <div class="folder-select-wrap">
+        <label for="folderSelect">Save to folder</label>
+        <select id="folderSelect">
+          <option value="">No folder</option>
+        </select>
+        <button type="button" id="btnNewFolder" class="btn-sm">New folder</button>
+      </div>
+    </div>
+
+    <div class="upload-zone" id="uploadZone">
+      <input type="file" id="fileInput" accept=".mp3,.wav,.mp4" multiple />
+      <label>Choose files</label>
+      <p>or drag and drop one or more files (max 100 MB each)</p>
+      <p class="upload-progress" id="uploadProgress">Uploading…</p>
+    </div>
+
+    <section class="folders-section">
+      <h2>Folders</h2>
+      <p class="text-muted">Organize uploads into folders. Select a folder above when uploading.</p>
+      <div class="folder-list" id="folderList"><p class="empty">Loading…</p></div>
+    </section>
+
+    <section class="jobs-section">
+      <h2>Queue &amp; Jobs</h2>
+      <div class="queue-controls">
+        <button type="button" id="btnPause" class="primary">Pause queue</button>
+        <button type="button" id="btnResume" style="display: none;">Resume queue</button>
+        <span class="paused-badge" id="pausedBadge" style="display: none;">Queue paused</span>
+      </div>
+      <div class="job-list" id="jobList"><p class="empty">Loading…</p></div>
+      <div class="detail-panel" id="detailPanel" style="display: none;">
+        <h3>Pipeline status</h3>
+        <div class="steps" id="steps"></div>
+        <div id="resultArea"></div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const API = '';
+    let selectedJobId = null;
+    let pollTimer = null;
+
+    const uploadZone = document.getElementById('uploadZone');
+    const fileInput = document.getElementById('fileInput');
+    const jobList = document.getElementById('jobList');
+    const detailPanel = document.getElementById('detailPanel');
+    const stepsEl = document.getElementById('steps');
+    const resultArea = document.getElementById('resultArea');
+    const btnPause = document.getElementById('btnPause');
+    const btnResume = document.getElementById('btnResume');
+    const pausedBadge = document.getElementById('pausedBadge');
+    const folderSelect = document.getElementById('folderSelect');
+    const btnNewFolder = document.getElementById('btnNewFolder');
+    const folderList = document.getElementById('folderList');
+
+    async function loadFolders() {
+      try {
+        const r = await fetch(API + '/api/folders');
+        const data = await r.json();
+        const folders = data.folders || [];
+        const sel = folderSelect;
+        const current = sel.value;
+        sel.innerHTML = '<option value="">No folder</option>' + folders.map(f => `<option value="${f.id}">${escapeHtml(f.name)}</option>`).join('');
+        if (current && folders.some(f => String(f.id) === current)) sel.value = current;
+        // Folder list
+        folderList.innerHTML = folders.length === 0
+          ? '<p class="empty">No folders yet. Click "New folder" to create one.</p>'
+          : folders.map(f => `
+            <div class="folder-item" data-folder-id="${f.id}">
+              <span class="name">${escapeHtml(f.name)}</span>
+              <div class="actions">
+                <button type="button" class="btn-edit-folder" data-folder-id="${f.id}" data-name="${escapeHtml(f.name)}">Edit</button>
+                <button type="button" class="btn-delete-folder danger" data-folder-id="${f.id}" data-name="${escapeHtml(f.name)}">Delete</button>
+              </div>
+            </div>
+          `).join('');
+        folderList.querySelectorAll('.btn-edit-folder').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const name = prompt('Folder name:', btn.getAttribute('data-name') || '');
+            if (name == null || name.trim() === '') return;
+            editFolder(parseInt(btn.getAttribute('data-folder-id'), 10), name.trim());
+          });
+        });
+        folderList.querySelectorAll('.btn-delete-folder').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (!confirm('Delete folder "' + (btn.getAttribute('data-name') || '') + '"? Jobs in it will be unassigned.')) return;
+            deleteFolder(parseInt(btn.getAttribute('data-folder-id'), 10));
+          });
+        });
+      } catch (_) {}
+    }
+
+    async function createFolder() {
+      const name = prompt('New folder name:');
+      if (!name || !name.trim()) return;
+      try {
+        const r = await fetch(API + '/api/folders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'name=' + encodeURIComponent(name.trim()),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        await loadFolders();
+        const data = await r.json();
+        if (data.id) folderSelect.value = String(data.id);
+      } catch (e) {
+        alert('Failed to create folder: ' + e.message);
+      }
+    }
+
+    async function editFolder(id, name) {
+      try {
+        const r = await fetch(API + '/api/folders/' + id, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        await loadFolders();
+        await refreshQueue();
+      } catch (e) {
+        alert('Failed to rename folder: ' + e.message);
+      }
+    }
+
+    async function deleteFolder(id) {
+      try {
+        const r = await fetch(API + '/api/folders/' + id, { method: 'DELETE' });
+        if (!r.ok) throw new Error(await r.text());
+        await loadFolders();
+        if (folderSelect.value === String(id)) folderSelect.value = '';
+        await refreshQueue();
+      } catch (e) {
+        alert('Failed to delete folder: ' + e.message);
+      }
+    }
+
+    btnNewFolder.addEventListener('click', createFolder);
+
+    uploadZone.addEventListener('click', () => fileInput.click());
+    uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+    uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+    uploadZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadZone.classList.remove('dragover');
+      const files = e.dataTransfer?.files;
+      if (files && files.length) doUpload(Array.from(files));
+    });
+    fileInput.addEventListener('change', () => {
+      const files = fileInput.files;
+      if (files && files.length) doUpload(Array.from(files));
+      fileInput.value = '';
+    });
+
+    async function doUpload(files) {
+      const fd = new FormData();
+      for (const file of files) fd.append('files', file);
+      const folderId = folderSelect.value;
+      if (folderId) fd.append('folder_id', folderId);
+      const progressEl = document.getElementById('uploadProgress');
+      uploadZone.classList.add('uploading');
+      progressEl.textContent = 'Uploading ' + files.length + ' file(s)…';
+      try {
+        const r = await fetch(API + '/api/upload', { method: 'POST', body: fd });
+        if (!r.ok) {
+          const t = await r.text();
+          throw new Error(t || r.statusText);
+        }
+        const data = await r.json();
+        const results = data.results || [];
+        const withWarnings = results.filter(x => x.warnings && x.warnings.length);
+        if (withWarnings.length) {
+          const msg = withWarnings.map(x =>
+            escapeHtml(x.original_filename || '') + ': ' + (x.warnings || []).join('; ')
+          ).join('\n');
+          alert('Uploaded with warnings:\n\n' + msg);
+        }
+        if (results.length && results[0].queue_id) selectedJobId = null;
+        await refreshQueue();
+        startPolling();
+      } catch (e) {
+        alert('Upload failed: ' + e.message);
+      } finally {
+        uploadZone.classList.remove('uploading');
+        progressEl.textContent = 'Uploading…';
+      }
+    }
+
+    async function refreshQueue() {
+      try {
+        const r = await fetch(API + '/api/queue');
+        const q = await r.json();
+        const paused = q.paused === true;
+        btnPause.style.display = paused ? 'none' : 'inline-block';
+        btnResume.style.display = paused ? 'inline-block' : 'none';
+        pausedBadge.style.display = paused ? 'inline' : 'none';
+
+        const allPending = q.pending || [];
+        const pending = allPending.filter(x => x.status === 'pending');
+        const currentId = q.current_job_id || null;
+        const jobs = q.jobs || [];
+        const parts = [];
+
+        if (paused && (pending.length || currentId)) {
+          parts.push('<p class="warning-msg">Queue is paused. Resume to process pending files.</p>');
+        }
+
+        pending.forEach(item => {
+          parts.push(`
+            <div class="job-card pending-item" data-queue-id="${escapeHtml(item.queue_id)}">
+              <div>
+                <div class="name">${escapeHtml(item.original_filename || '')}</div>
+                <div class="meta">Queued (pending)</div>
+              </div>
+              <div class="actions">
+                <button type="button" class="btn-remove-pending" data-queue-id="${escapeHtml(item.queue_id)}">Remove</button>
+              </div>
+            </div>
+          `);
+        });
+
+        if (currentId) {
+          const j = jobs.find(x => x.job_id === currentId) || { job_id: currentId, original_filename: 'Processing...', status: 'running' };
+          parts.push(`
+            <div class="job-card ${j.job_id === selectedJobId ? 'active' : ''}" data-job-id="${j.job_id}">
+              <div style="cursor:pointer;" class="job-card-click">
+                <div class="name">${escapeHtml(j.original_filename || j.job_id)}</div>
+                <div class="meta">${j.job_id}</div>
+              </div>
+              <div class="actions">
+                <span class="badge running">running</span>
+                <button type="button" class="btn-cancel-job" data-job-id="${j.job_id}">Cancel</button>
+              </div>
+            </div>
+          `);
+        }
+
+        jobs.forEach(j => {
+          if (j.job_id === currentId) return;
+          const isDone = j.status === 'completed' || j.status === 'failed' || j.status === 'cancelled';
+          parts.push(`
+            <div class="job-card ${j.job_id === selectedJobId ? 'active' : ''}" data-job-id="${j.job_id}">
+              <div style="cursor:pointer;" class="job-card-click">
+                <div class="name">${escapeHtml(j.original_filename || j.job_id)}</div>
+                <div class="meta">${j.job_id}</div>
+              </div>
+              <div class="actions">
+                <span class="badge ${j.status}">${j.status}</span>
+                ${isDone ? `<button type="button" class="btn-remove-job" data-job-id="${j.job_id}">Remove</button>` : ''}
+              </div>
+            </div>
+          `);
+        });
+
+        jobList.innerHTML = parts.length === 0
+          ? '<p class="empty">No items in queue. Upload files above.</p>'
+          : parts.join('');
+
+        jobList.querySelectorAll('.job-card-click').forEach(el => {
+          el.addEventListener('click', (e) => {
+            if (e.target.closest('button')) return;
+            const card = el.closest('.job-card');
+            if (card && card.dataset.jobId) {
+              selectedJobId = card.dataset.jobId;
+              refreshQueue();
+              showDetail(selectedJobId);
+            }
+          });
+        });
+        jobList.querySelectorAll('.btn-remove-pending').forEach(btn => {
+          btn.addEventListener('click', (e) => { e.stopPropagation(); removePending(btn.dataset.queueId); });
+        });
+        jobList.querySelectorAll('.btn-cancel-job').forEach(btn => {
+          btn.addEventListener('click', (e) => { e.stopPropagation(); cancelJob(btn.dataset.jobId); });
+        });
+        jobList.querySelectorAll('.btn-remove-job').forEach(btn => {
+          btn.addEventListener('click', (e) => { e.stopPropagation(); removeJob(btn.dataset.jobId); });
+        });
+
+        if (selectedJobId) showDetail(selectedJobId);
+      } catch (_) {}
+    }
+
+    async function removePending(queueId) {
+      try {
+        const r = await fetch(API + '/api/queue/pending/' + encodeURIComponent(queueId), { method: 'DELETE' });
+        if (r.ok) await refreshQueue();
+      } catch (_) {}
+    }
+    async function removeJob(jobId) {
+      try {
+        const r = await fetch(API + '/api/job/' + encodeURIComponent(jobId), { method: 'DELETE' });
+        if (r.ok) {
+          if (selectedJobId === jobId) selectedJobId = null;
+          await refreshQueue();
+        }
+      } catch (_) {}
+    }
+    async function cancelJob(jobId) {
+      try {
+        const r = await fetch(API + '/api/job/' + encodeURIComponent(jobId) + '/cancel', { method: 'POST' });
+        if (r.ok) {
+          await refreshQueue();
+          if (selectedJobId === jobId) showDetail(selectedJobId);
+        } else {
+          let msg = r.statusText || 'Cancel failed';
+          if (r.status === 404) {
+            try {
+              const d = await r.json();
+              msg = (d && d.detail) || (Array.isArray(d.detail) ? d.detail[0] : 'Job not found or not running');
+            } catch (_) {}
+          }
+          alert(msg);
+        }
+      } catch (e) {
+        alert('Cancel failed: ' + (e.message || 'network error'));
+      }
+    }
+
+    btnPause.addEventListener('click', async () => {
+      try {
+        await fetch(API + '/api/queue/pause', { method: 'POST' });
+        await refreshQueue();
+      } catch (_) {}
+    });
+    btnResume.addEventListener('click', async () => {
+      try {
+        await fetch(API + '/api/queue/resume', { method: 'POST' });
+        await refreshQueue();
+      } catch (_) {}
+    });
+
+    function startPolling() {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(() => {
+        refreshQueue();
+      }, 1500);
+    }
+
+    async function showDetail(jobId) {
+      detailPanel.style.display = 'block';
+      try {
+        const r = await fetch(API + '/api/status/' + encodeURIComponent(jobId));
+        const data = await r.json();
+        const stepOrder = ['preprocess', 'transcribe', 'analyze'];
+        stepsEl.innerHTML = stepOrder.map(id => {
+          const s = data.steps?.[id] || {};
+          const status = s.status || 'pending';
+          const icon = status === 'running' ? '…' : status === 'completed' ? '✓' : status === 'failed' ? '✕' : '○';
+          return `
+            <div class="step">
+              <span class="icon ${status}">${icon}</span>
+              <span class="label">${escapeHtml(s.name || id)}</span>
+              <span class="msg">${escapeHtml(s.message || '')} ${s.detail ? '· ' + escapeHtml(s.detail) : ''}</span>
+            </div>
+          `;
+        }).join('');
+
+        if (data.status === 'failed' && data.error) {
+          resultArea.innerHTML = `<div class="error-msg">${escapeHtml(data.error)}</div>`;
+          return;
+        }
+
+        const res = data.result || {};
+        const steps = data.steps || {};
+        const preprocessDone = steps.preprocess?.status === 'completed';
+        const transcribeDone = steps.transcribe?.status === 'completed';
+        const analyzeDone = steps.analyze?.status === 'completed';
+
+        const parts = [];
+
+        // Step 1: Preprocessed audio (show as soon as preprocess completes)
+        if (preprocessDone) {
+          parts.push(`
+            <div class="result-block">
+              <h4>Preprocessed audio</h4>
+              <p class="value" style="margin:0;">Play the normalized WAV from the Preprocess step.</p>
+              <audio id="jobAudio" controls preload="metadata" src="${API}/api/audio/${encodeURIComponent(jobId)}"></audio>
+            </div>
+          `);
+        }
+
+        // Step 2: Transcription with clickable timestamps (show when transcribe completes)
+        if (transcribeDone) {
+          const timestamps = res.timestamps || [];
+          const transcriptionHtml = timestamps.length > 0
+            ? timestamps.map(t => {
+                const startSec = typeof t.start === 'number' ? t.start : parseFloat(t.start) || 0;
+                return `<div class="transcription-segment"><a href="#" class="timestamp-link" data-start="${startSec}" role="button">[${formatTime(startSec)}]</a> ${escapeHtml(t.text || '')}</div>`;
+              }).join('')
+            : '<div class="value">' + escapeHtml(res.transcription || '(none)') + '</div>';
+          parts.push(`
+            <div class="result-block">
+              <h4>Transcription</h4>
+              <div class="value">${transcriptionHtml}</div>
+            </div>
+          `);
+        }
+
+        // Step 3: Analysis results (main topic, subtopics, key timestamps, truth statements)
+        if (analyzeDone) {
+          parts.push(`
+            <div class="result-block">
+              <h4>Main topic</h4>
+              <div class="value">${escapeHtml(res.main_topic || '(none)')}</div>
+            </div>
+            <div class="result-block">
+              <h4>Sub-topics</h4>
+              ${res.subtopics?.length ? '<ul>' + res.subtopics.map(s => '<li>' + escapeHtml(s) + '</li>').join('') + '</ul>' : '<div class="value empty">(none)</div>'}
+            </div>
+            <div class="result-block">
+              <h4>Key timestamps</h4>
+              ${(res.timestamps?.length)
+                ? '<div class="value">' + (res.timestamps.slice(0, 20).map(t => {
+                    const startSec = typeof t.start === 'number' ? t.start : parseFloat(t.start) || 0;
+                    return `<div class="transcription-segment"><a href="#" class="timestamp-link" data-start="${startSec}" role="button">[${formatTime(t.start)}–${formatTime(t.end)}]</a> ${escapeHtml(t.text)}</div>`;
+                  }).join('')) + (res.timestamps.length > 20 ? '<div class="empty">…</div>' : '') + '</div>'
+                : '<div class="value empty">(none)</div>'}
+            </div>
+            <div class="result-block">
+              <h4>Truth statements</h4>
+              <div class="md-table">${markdownToHtml(res.truth_statements_md || '(none)')}</div>
+            </div>
+          `);
+        }
+
+        if (parts.length === 0) {
+          resultArea.innerHTML = '<p class="empty">Results will appear here as each step completes.</p>';
+        } else {
+          resultArea.innerHTML = parts.join('');
+          // Attach click handlers for timestamp links (seek and play)
+          const audioEl = document.getElementById('jobAudio');
+          resultArea.querySelectorAll('.timestamp-link').forEach(link => {
+            link.addEventListener('click', (e) => {
+              e.preventDefault();
+              const start = parseFloat(link.getAttribute('data-start'));
+              if (audioEl && !isNaN(start)) {
+                audioEl.currentTime = start;
+                audioEl.play().catch(() => {});
+              }
+            });
+          });
+        }
+      } catch (_) {
+        resultArea.innerHTML = '<p class="error-msg">Could not load job.</p>';
+      }
+    }
+
+    function formatTime(s) {
+      const m = Math.floor(s / 60);
+      const sec = Math.floor(s % 60);
+      return m + ':' + (sec < 10 ? '0' : '') + sec;
+    }
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    function markdownToHtml(md) {
+      if (!md || md === '(none)') return '<span class="empty">(none)</span>';
+      // Simple: newlines -> <br>, table lines kept as text in a <pre> or basic table parse
+      const lines = md.split('\n');
+      let inTable = false;
+      let tableRows = [];
+      const out = [];
+      for (const line of lines) {
+        if (line.startsWith('|') && line.endsWith('|')) {
+          if (!inTable) { inTable = true; tableRows = []; }
+          const cells = line.split('|').slice(1, -1).map(c => c.trim());
+          tableRows.push(cells);
+        } else {
+          if (inTable && tableRows.length) {
+            const header = tableRows[0];
+            const body = tableRows.slice(2);
+            out.push('<table><thead><tr>' + header.map(h => '<th>' + escapeHtml(h) + '</th>').join('') + '</tr></thead><tbody>');
+            body.forEach(row => out.push('<tr>' + row.map(c => '<td>' + escapeHtml(c) + '</td>').join('') + '</tr>'));
+            out.push('</tbody></table>');
+            inTable = false;
+          }
+          out.push(escapeHtml(line) + '<br>');
+        }
+      }
+      if (inTable && tableRows.length) {
+        const header = tableRows[0];
+        const body = tableRows.slice(2);
+        out.push('<table><thead><tr>' + header.map(h => '<th>' + escapeHtml(h) + '</th>').join('') + '</tr></thead><tbody>');
+        body.forEach(row => out.push('<tr>' + row.map(c => '<td>' + escapeHtml(c) + '</td>').join('') + '</tr>'));
+        out.push('</tbody></table>');
+      }
+      return out.join('');
+    }
+
+    // Load folders and queue in parallel so the page feels faster
+    Promise.all([loadFolders(), refreshQueue()]).catch(() => {});
+  </script>
+</body>
+</html>

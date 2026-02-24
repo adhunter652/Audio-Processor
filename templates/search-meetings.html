@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Search meetings – Audio Processing Pipeline</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0f0f12;
+      --surface: #18181c;
+      --border: #2a2a30;
+      --text: #e4e4e7;
+      --text-muted: #71717a;
+      --accent: #a78bfa;
+      --accent-dim: #7c3aed;
+      --radius: 10px;
+      --radius-sm: 6px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: 'DM Sans', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .layout { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem; }
+    nav {
+      margin-bottom: 1.5rem;
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+    nav a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+    nav a:hover { color: var(--accent); }
+    h1 { font-size: 1.75rem; font-weight: 700; margin: 0 0 0.5rem; }
+    .subtitle { color: var(--text-muted); font-size: 0.95rem; margin-bottom: 1.5rem; }
+    .search-row {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+    .search-row input[type="search"] {
+      flex: 1;
+      padding: 0.6rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 1rem;
+    }
+    .search-row input:focus { outline: none; border-color: var(--accent); }
+    .search-row button {
+      padding: 0.6rem 1.2rem;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .search-row button:hover { background: var(--accent-dim); }
+    .filter-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+    .filter-row .filter-label { font-size: 0.9rem; color: var(--text-muted); white-space: nowrap; }
+    .folder-checkboxes {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 1rem;
+    }
+    .folder-checkboxes label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.9rem;
+      cursor: pointer;
+      color: var(--text);
+    }
+    .folder-checkboxes input { margin: 0; }
+    .results { display: flex; flex-direction: column; gap: 0.5rem; }
+    .meeting-card {
+      padding: 1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .meeting-card:hover { border-color: var(--accent); background: rgba(167, 139, 250, 0.04); }
+    .meeting-card .name { font-weight: 600; margin-bottom: 0.25rem; }
+    .meeting-card .topic { font-size: 0.9rem; color: var(--text-muted); }
+    .empty { color: var(--text-muted); font-style: italic; }
+    .detail-panel {
+      margin-top: 1.5rem;
+      padding: 1.25rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .detail-panel h3 { font-size: 1rem; margin: 0 0 0.75rem; font-weight: 600; }
+    .result-block {
+      margin-top: 1rem;
+      padding: 1rem;
+      background: var(--bg);
+      border-radius: var(--radius-sm);
+      font-size: 0.9rem;
+    }
+    .result-block h4 {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin: 0 0 0.5rem;
+    }
+    .result-block .value { white-space: pre-wrap; word-break: break-word; }
+    .result-block ul { margin: 0.25rem 0 0; padding-left: 1.25rem; }
+    .result-block table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    .result-block th, .result-block td { text-align: left; padding: 0.4rem 0.6rem; border: 1px solid var(--border); }
+    .result-block th { color: var(--text-muted); font-weight: 500; }
+    .back-link { display: inline-block; margin-bottom: 1rem; color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+    .back-link:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav>
+      <a href="/">Pipeline</a>
+      <a href="/search/transcripts">Search transcripts</a>
+      <a href="/search/meetings">Search meetings</a>
+    </nav>
+    <h1>Search meetings</h1>
+    <p class="subtitle">Search by main topic. Results are indexed in a separate RAG database. Click a meeting to view full processing results.</p>
+
+    <div id="searchView">
+      <div class="search-row">
+        <input type="search" id="query" placeholder="e.g. product launch, Q4 planning" />
+        <button type="button" id="searchBtn">Search</button>
+      </div>
+      <div class="filter-row">
+        <span class="filter-label">Filter by folders:</span>
+        <div class="folder-checkboxes" id="folderFilters"></div>
+      </div>
+      <div class="results" id="results"></div>
+    </div>
+
+    <div id="detailView" style="display: none;">
+      <a href="#" class="back-link" id="backLink">← Back to search results</a>
+      <div class="detail-panel" id="detailPanel"></div>
+    </div>
+  </div>
+
+  <script>
+    const API = '';
+    const resultsEl = document.getElementById('results');
+    const queryEl = document.getElementById('query');
+    const searchBtn = document.getElementById('searchBtn');
+    const searchView = document.getElementById('searchView');
+    const detailView = document.getElementById('detailView');
+    const detailPanel = document.getElementById('detailPanel');
+    const backLink = document.getElementById('backLink');
+    const folderFilters = document.getElementById('folderFilters');
+
+    async function loadFolders() {
+      try {
+        const r = await fetch(API + '/api/folders');
+        const data = await r.json();
+        const folders = data.folders || [];
+        folderFilters.innerHTML = folders.map(f => `
+          <label><input type="checkbox" class="folder-filter-cb" value="${f.id}" /> ${escapeHtml(f.name)}</label>
+        `).join('');
+      } catch (_) {}
+    }
+
+    function getSelectedFolderIds() {
+      return Array.from(folderFilters.querySelectorAll('.folder-filter-cb:checked')).map(cb => parseInt(cb.value, 10));
+    }
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    function markdownTableToHtml(md) {
+      if (!md) return '';
+      const lines = md.split('\n');
+      let inTable = false;
+      let rows = [];
+      const out = [];
+      for (const line of lines) {
+        if (line.startsWith('|') && line.endsWith('|')) {
+          if (!inTable) { inTable = true; rows = []; }
+          const cells = line.split('|').slice(1, -1).map(c => c.trim());
+          rows.push(cells);
+        } else {
+          if (inTable && rows.length) {
+            const header = rows[0];
+            const body = rows.slice(2);
+            out.push('<table><thead><tr>' + header.map(h => '<th>' + escapeHtml(h) + '</th>').join('') + '</tr></thead><tbody>');
+            body.forEach(row => out.push('<tr>' + row.map(c => '<td>' + escapeHtml(c) + '</td>').join('') + '</tr>'));
+            out.push('</tbody></table>');
+            inTable = false;
+          }
+          if (line.trim()) out.push(escapeHtml(line) + '<br>');
+        }
+      }
+      if (inTable && rows.length) {
+        const header = rows[0];
+        const body = rows.slice(2);
+        out.push('<table><thead><tr>' + header.map(h => '<th>' + escapeHtml(h) + '</th>').join('') + '</tr></thead><tbody>');
+        body.forEach(row => out.push('<tr>' + row.map(c => '<td>' + escapeHtml(c) + '</td>').join('') + '</tr>'));
+        out.push('</tbody></table>');
+      }
+      return out.join('');
+    }
+
+    async function doSearch() {
+      const q = (queryEl.value || '').trim();
+      if (!q) {
+        resultsEl.innerHTML = '<p class="empty">Enter a search query.</p>';
+        return;
+      }
+      resultsEl.innerHTML = '<p class="empty">Searching…</p>';
+      const fids = getSelectedFolderIds();
+      const fidsParam = fids.length ? '&folder_ids=' + encodeURIComponent(fids.join(',')) : '';
+      try {
+        const r = await fetch(API + '/api/search/meetings?q=' + encodeURIComponent(q) + fidsParam);
+        const data = await r.json();
+        const results = data.results || [];
+        if (results.length === 0) {
+          resultsEl.innerHTML = '<p class="empty">No meetings found. Process some audio first and try again.</p>';
+          return;
+        }
+        resultsEl.innerHTML = results.map(m => `
+          <div class="meeting-card" data-job-id="${escapeHtml(m.job_id)}">
+            <div class="name">${escapeHtml(m.original_filename || m.job_id)}</div>
+            <div class="topic">${escapeHtml(m.main_topic || '')}</div>
+          </div>
+        `).join('');
+
+        resultsEl.querySelectorAll('.meeting-card').forEach(card => {
+          card.addEventListener('click', () => showMeetingDetail(card.getAttribute('data-job-id')));
+        });
+      } catch (e) {
+        resultsEl.innerHTML = '<p class="empty">Search failed: ' + escapeHtml(e.message) + '</p>';
+      }
+    }
+
+    async function showMeetingDetail(jobId) {
+      searchView.style.display = 'none';
+      detailView.style.display = 'block';
+      detailPanel.innerHTML = '<p class="empty">Loading…</p>';
+      try {
+        const r = await fetch(API + '/api/result/' + encodeURIComponent(jobId));
+        const data = await r.json();
+        const res = data.result || {};
+        if (data.status !== 'completed' || !res) {
+          detailPanel.innerHTML = '<p class="empty">Result not available.</p>';
+          return;
+        }
+        const parts = [];
+        parts.push('<h3>Full processing results</h3>');
+        parts.push('<div class="result-block"><h4>Original file</h4><div class="value">' + escapeHtml(res.original_filename || jobId) + '</div></div>');
+        parts.push('<div class="result-block"><h4>Main topic</h4><div class="value">' + escapeHtml(res.main_topic || '(none)') + '</div></div>');
+        if (res.subtopics && res.subtopics.length) {
+          parts.push('<div class="result-block"><h4>Sub-topics</h4><ul>' + res.subtopics.map(s => '<li>' + escapeHtml(s) + '</li>').join('') + '</ul></div>');
+        }
+        if (res.transcription) {
+          parts.push('<div class="result-block"><h4>Transcription</h4><div class="value">' + escapeHtml(res.transcription) + '</div></div>');
+        }
+        if (res.truth_statements_md) {
+          parts.push('<div class="result-block"><h4>Truth statements</h4><div class="value">' + markdownTableToHtml(res.truth_statements_md) + '</div></div>');
+        }
+        detailPanel.innerHTML = parts.join('');
+      } catch (e) {
+        detailPanel.innerHTML = '<p class="empty">Failed to load result.</p>';
+      }
+    }
+
+    backLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      detailView.style.display = 'none';
+      searchView.style.display = 'block';
+    });
+
+    loadFolders();
+    searchBtn.addEventListener('click', doSearch);
+    queryEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+  </script>
+</body>
+</html>

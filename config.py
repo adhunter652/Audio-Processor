@@ -35,6 +35,16 @@ LLM_REPETITION_PENALTY = float(os.getenv("LLM_REPETITION_PENALTY", "1.1"))
 
 # SQL database (folders, job metadata for folder assignment and search filter)
 DATABASE_PATH = BASE_DIR / "data" / "app.db"
+# Cloud SQL (when USE_CLOUD_SQL=1): PostgreSQL for folders + jobs (+ optional job_state)
+USE_CLOUD_SQL = os.getenv("USE_CLOUD_SQL", "0").strip().lower() in ("1", "true", "yes")
+CLOUD_SQL_CONNECTION_NAME = os.getenv("CLOUD_SQL_CONNECTION_NAME", "")
+DB_USER = os.getenv("DB_USER", "")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+DB_NAME = os.getenv("DB_NAME", "")
+
+# GCS buckets (Phase 2: uploads; Phase 5: outputs)
+GCS_UPLOAD_BUCKET = os.getenv("GCS_UPLOAD_BUCKET", "")
+GCS_OUTPUT_BUCKET = os.getenv("GCS_OUTPUT_BUCKET", "")
 
 # RAG: local embedding model and vector DB path
 RAG_DIR = BASE_DIR / "rag_db"
@@ -42,5 +52,6 @@ RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 RAG_SEARCH_LIMIT = int(os.getenv("RAG_SEARCH_LIMIT", "20"))
 
 # Server: bind address and port (0.0.0.0 = all interfaces, accessible from LAN)
+# Cloud Run sets PORT; use it when present so the container listens on the correct port.
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
-SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
+SERVER_PORT = int(os.getenv("PORT") or os.getenv("SERVER_PORT", "8000"))

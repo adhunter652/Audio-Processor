@@ -1,0 +1,9 @@
+
+[
+  {
+    "origin": ["https://audio-pipeline-158822246647.us-central1.run.app"],
+    "method": ["PUT", "GET"],
+    "responseHeader": ["Content-Type"],
+    "maxAgeSeconds": 3600
+  }
+]

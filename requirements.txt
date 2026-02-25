@@ -18,3 +18,10 @@ sentence-transformers>=2.2.0
 
 # Environment
 python-dotenv>=1.0.0
+
+# GCS (Phase 2: signed URLs, uploads)
+google-cloud-storage>=2.14.0
+
+# Cloud SQL (optional: USE_CLOUD_SQL=1)
+pg8000>=1.30.0
+cloud-sql-python-connector[pg8000]>=1.0.0

@@ -1,0 +1,29 @@
+# Local runtime data (not needed in image)
+uploads/
+outputs/
+rag_db/
+app/data/
+*.db
+
+# Git and IDE
+.git
+.gitignore
+.cursor
+*.md
+!README.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Tests and docs (optional: remove if you want docs in image)
+tests/
+docs/
+*.plan.md

@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Union
 
 from config import OUTPUT_DIR
 
@@ -134,17 +134,21 @@ _persisted_loaded: bool = False
 
 
 def _save_job_state(state: PipelineState) -> None:
-    """Persist completed, failed, or cancelled job to disk and to SQL DB so it survives restarts."""
+    """Persist completed, failed, or cancelled job to disk/Cloud SQL and to jobs table so it survives restarts."""
     if state.status not in ("completed", "failed", "cancelled"):
         return
-    JOBS_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    path = JOBS_STATE_DIR / f"{state.job_id}.json"
     try:
-        path.write_text(json.dumps(state.to_persist_dict(), indent=2), encoding="utf-8")
-    except Exception:
-        pass
-    try:
-        from app.db import upsert_job
+        from config import USE_CLOUD_SQL, GCS_OUTPUT_BUCKET
+        from app.db import upsert_job, save_job_state
+        if USE_CLOUD_SQL:
+            save_job_state(state.job_id, state.to_persist_dict())
+        else:
+            JOBS_STATE_DIR.mkdir(parents=True, exist_ok=True)
+            path = JOBS_STATE_DIR / f"{state.job_id}.json"
+            try:
+                path.write_text(json.dumps(state.to_persist_dict(), indent=2), encoding="utf-8")
+            except Exception:
+                pass
         upsert_job(
             state.job_id,
             folder_id=state.folder_id,
@@ -152,30 +156,60 @@ def _save_job_state(state: PipelineState) -> None:
             file_hash=state.file_hash,
             status=state.status,
         )
+        # Phase 5: optional durability — upload job_state JSON to GCS when configured
+        if GCS_OUTPUT_BUCKET:
+            try:
+                from google.cloud import storage
+                client = storage.Client()
+                bucket = client.bucket(GCS_OUTPUT_BUCKET)
+                blob = bucket.blob(f"job_state/{state.job_id}.json")
+                blob.upload_from_string(
+                    json.dumps(state.to_persist_dict(), indent=2),
+                    content_type="application/json",
+                )
+            except Exception:
+                pass
     except Exception:
         pass
 
 
 def _load_persisted_jobs() -> None:
-    """Load previously persisted jobs from disk. Parse files outside the lock so /api/queue does not block."""
-    if not JOBS_STATE_DIR.exists():
-        logger.info("Load persisted jobs: no job_state dir, skipping")
-        return
-    paths = list(JOBS_STATE_DIR.glob("*.json"))
-    if not paths:
-        logger.info("Load persisted jobs: 0 files, skipping")
-        return
-    t0 = time.perf_counter()
-    logger.info("Load persisted jobs: reading %d JSON files (outside lock)...", len(paths))
+    """Load previously persisted jobs from disk or Cloud SQL. Parse outside the lock so /api/queue does not block."""
+    from config import USE_CLOUD_SQL
     loaded: list[tuple[PipelineState, str | None]] = []
-    for path in paths:
+    t0 = time.perf_counter()
+    if USE_CLOUD_SQL:
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            state = PipelineState.from_dict(data)
-            h = state.file_hash if state.status == "completed" else None
-            loaded.append((state, h))
+            from app.db import load_all_job_states
+            for job_id, data in load_all_job_states():
+                try:
+                    state = PipelineState.from_dict(data)
+                    h = state.file_hash if state.status == "completed" else None
+                    loaded.append((state, h))
+                except Exception as e:
+                    logger.debug("Load persisted jobs: skip %s: %s", job_id, e)
         except Exception as e:
-            logger.debug("Load persisted jobs: skip %s: %s", path.name, e)
+            logger.warning("Load persisted jobs from Cloud SQL failed: %s", e)
+    else:
+        if not JOBS_STATE_DIR.exists():
+            logger.info("Load persisted jobs: no job_state dir, skipping")
+            return
+        paths = list(JOBS_STATE_DIR.glob("*.json"))
+        if not paths:
+            logger.info("Load persisted jobs: 0 files, skipping")
+            return
+        logger.info("Load persisted jobs: reading %d JSON files (outside lock)...", len(paths))
+        for path in paths:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                state = PipelineState.from_dict(data)
+                h = state.file_hash if state.status == "completed" else None
+                loaded.append((state, h))
+            except Exception as e:
+                logger.debug("Load persisted jobs: skip %s: %s", path.name, e)
+    if not loaded:
+        logger.info("Load persisted jobs: 0 jobs to load")
+        return
     t_read = time.perf_counter() - t0
     logger.info("Load persisted jobs: parsed %d jobs in %.3fs, applying under lock...", len(loaded), t_read)
     t1 = time.perf_counter()
@@ -240,16 +274,21 @@ def get_queue_state() -> dict:
     }
 
 
-def add_to_queue(upload_path: Path, original_filename: str, file_hash: str, folder_id: int | None = None) -> str:
+def add_to_queue(
+    upload_ref: Union[Path, str],
+    original_filename: str,
+    file_hash: str,
+    folder_id: int | None = None,
+) -> str:
     """Add a file to the queue. Returns queue_id.
+    upload_ref: local Path or GCS URI (gs://bucket/object). Worker resolves to local path when processing.
     Only appends to the queue; never interrupts or replaces the current job.
-    The worker processes one job at a time and picks the next item only after the current run finishes.
     """
     queue_id = str(uuid.uuid4())
     with _lock:
         _queue.append({
             "queue_id": queue_id,
-            "upload_path": upload_path,
+            "upload_ref": upload_ref,
             "original_filename": original_filename,
             "file_hash": file_hash,
             "folder_id": folder_id,
@@ -330,7 +369,7 @@ def _worker_loop() -> None:
     import time
     while True:
         have_work = False
-        upload_path = original_filename = file_hash = folder_id = job_id = None
+        upload_ref = original_filename = file_hash = folder_id = job_id = None
         with _lock:
             if _queue_paused or not _queue:
                 _current_job_id = None
@@ -338,7 +377,7 @@ def _worker_loop() -> None:
                 for i, q in enumerate(_queue):
                     if q["status"] == "pending":
                         q["status"] = "running"
-                        upload_path = q["upload_path"]
+                        upload_ref = q["upload_ref"]
                         original_filename = q["original_filename"]
                         file_hash = q.get("file_hash") or ""
                         folder_id = q.get("folder_id")
@@ -350,6 +389,20 @@ def _worker_loop() -> None:
                     _current_job_id = None
         if not have_work:
             time.sleep(1)
+            continue
+
+        # Resolve upload ref to local path (download from GCS if needed)
+        try:
+            from app.storage import get_upload_path, delete_local_if_temp
+            local_path = get_upload_path(upload_ref)
+            was_gcs = isinstance(upload_ref, str) and str(upload_ref).startswith("gs://")
+        except Exception as e:
+            logger.exception("Failed to resolve upload ref: %s", e)
+            with _lock:
+                for i, q in enumerate(_queue):
+                    if q.get("job_id") == job_id:
+                        _queue.pop(i)
+                        break
             continue
 
         # Pre-create job state (lock released so GET /api/queue is not blocked)
@@ -370,10 +423,30 @@ def _worker_loop() -> None:
             _current_job_id = job_id
 
         try:
-            run_pipeline(upload_path, original_filename, job_id=job_id, file_hash=file_hash or None, folder_id=folder_id)
+            run_pipeline(local_path, original_filename, job_id=job_id, file_hash=file_hash or None, folder_id=folder_id)
+            # Phase 5: upload WAV to GCS when configured so Spot VM / other consumers can use it
+            if state.status == "completed":
+                from config import GCS_OUTPUT_BUCKET
+                if GCS_OUTPUT_BUCKET:
+                    wav_path = OUTPUT_DIR / f"{job_id}_audio.wav"
+                    if wav_path.exists():
+                        try:
+                            from app.storage import upload_local_file
+                            upload_local_file(
+                                wav_path,
+                                f"gs://{GCS_OUTPUT_BUCKET}/outputs/{job_id}_audio.wav",
+                                content_type="audio/wav",
+                            )
+                        except Exception as e:
+                            logger.warning("Failed to upload WAV to GCS: %s", e)
         except Exception:
             pass  # state already set to failed in run_pipeline
         finally:
+            try:
+                from app.storage import delete_local_if_temp
+                delete_local_if_temp(local_path, was_gcs=isinstance(upload_ref, str) and str(upload_ref).startswith("gs://"))
+            except Exception:
+                pass
             with _lock:
                 _current_job_id = None
                 if state.status == "completed" and state.file_hash:

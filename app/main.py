@@ -6,12 +6,14 @@ import uuid
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import (
     ALLOWED_EXTENSIONS,
     BASE_DIR,
+    GCS_OUTPUT_BUCKET,
+    GCS_UPLOAD_BUCKET,
     MAX_FILE_SIZE_BYTES,
     OUTPUT_DIR,
     RAG_SEARCH_LIMIT,
@@ -48,25 +50,34 @@ def _ensure_pipeline_logging():
         log.addHandler(h)
 
 
-@app.on_event("startup")
-def startup_ffmpeg_check():
+def _run_startup_tasks():
+    """Run DB init, ffmpeg check, and queue worker in a background thread so the server can bind to PORT immediately (required for Cloud Run)."""
     _ensure_pipeline_logging()
     t0 = time.perf_counter()
-    logger.info("Startup: initializing database...")
+    logger.info("Startup (background): initializing database...")
     init_db()
-    logger.info("Startup: init_db took %.3fs", time.perf_counter() - t0)
+    logger.info("Startup (background): init_db took %.3fs", time.perf_counter() - t0)
     t1 = time.perf_counter()
     ok, msg = check_ffmpeg_available()
     if not ok:
         logging.getLogger("uvicorn.error").warning(
             "FFmpeg not available: %s Pipeline will fail for .mp3/.mp4 uploads. WAV may still work.", msg
         )
-    logger.info("Startup: check_ffmpeg took %.3fs", time.perf_counter() - t1)
+    logger.info("Startup (background): check_ffmpeg took %.3fs", time.perf_counter() - t1)
     t2 = time.perf_counter()
-    logger.info("Startup: starting queue worker (persisted jobs will load in worker thread)...")
+    logger.info("Startup (background): starting queue worker (persisted jobs will load in worker thread)...")
     start_queue_worker()
-    logger.info("Startup: start_queue_worker took %.3fs (worker runs in background)", time.perf_counter() - t2)
-    logger.info("Startup: total %.3fs — server ready. Models (Whisper/LLM) load on first job, not on page load.", time.perf_counter() - t0)
+    logger.info("Startup (background): start_queue_worker took %.3fs (worker runs in background)", time.perf_counter() - t2)
+    logger.info("Startup (background): total %.3fs — ready. Models (Whisper/LLM) load on first job.", time.perf_counter() - t0)
+
+
+@app.on_event("startup")
+def startup_ffmpeg_check():
+    """Start the server quickly so Cloud Run sees the port listening; run DB/ffmpeg/worker in a background thread."""
+    import threading
+    t = threading.Thread(target=_run_startup_tasks, daemon=True)
+    t.start()
+    logger.info("Startup: server binding to port; DB/ffmpeg/worker initializing in background.")
 
 # Serve static assets if we add any
 static_dir = BASE_DIR / "static"
@@ -89,6 +100,12 @@ def _file_hash(content: bytes) -> str:
 _index_html: str | None = None
 
 
+@app.get("/api/config")
+async def api_config():
+    """Return client config (e.g. whether to use direct GCS upload)."""
+    return {"gcs_upload": bool(GCS_UPLOAD_BUCKET)}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     """Serve the web UI (cached so first load is fast)."""
@@ -106,6 +123,88 @@ async def index():
         if elapsed > 0.05:
             logger.info("Index: served cached HTML in %.3fs", elapsed)
     return HTMLResponse(content=_index_html)
+
+
+def _content_type_for_extension(suffix: str) -> str:
+    """Return Content-Type for allowed audio/video extensions."""
+    suf = (suffix or "").lower()
+    if suf == ".mp3":
+        return "audio/mpeg"
+    if suf == ".wav":
+        return "audio/wav"
+    if suf == ".mp4":
+        return "video/mp4"
+    return "application/octet-stream"
+
+
+@app.post("/api/upload-url")
+async def upload_url(
+    filename: str = Form(...),
+    size: int = Form(...),
+    folder_id: str | None = Form(default=None),
+):
+    """Generate a V4 signed URL for direct PUT upload to GCS. Requires GCS_UPLOAD_BUCKET to be set."""
+    if not GCS_UPLOAD_BUCKET:
+        raise HTTPException(503, "Direct upload to cloud is not configured (GCS_UPLOAD_BUCKET)")
+    _validate_file(filename, size)
+    stem = Path(filename).stem
+    suf = Path(filename).suffix or ".mp3"
+    object_name = f"uploads/{uuid.uuid4().hex[:12]}_{stem}{suf}"
+    content_type = _content_type_for_extension(suf)
+    try:
+        from google.cloud import storage
+        import datetime
+        client = storage.Client()
+        bucket = client.bucket(GCS_UPLOAD_BUCKET)
+        blob = bucket.blob(object_name)
+        upload_url_val = blob.generate_signed_url(
+            version="v4",
+            expiration=datetime.timedelta(minutes=15),
+            method="PUT",
+            content_type=content_type,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Failed to generate signed URL: {e}")
+    gcs_uri = f"gs://{GCS_UPLOAD_BUCKET}/{object_name}"
+    return {
+        "upload_url": upload_url_val,
+        "object_name": object_name,
+        "gcs_uri": gcs_uri,
+        "content_type": content_type,
+    }
+
+
+@app.post("/api/queue/enqueue")
+async def enqueue_from_gcs(
+    object_name: str = Form(...),
+    original_filename: str = Form(...),
+    folder_id: str | None = Form(default=None),
+    file_hash: str | None = Form(default=None),
+):
+    """Add a file already uploaded to GCS to the pipeline queue. Call after PUT to the signed URL."""
+    if not GCS_UPLOAD_BUCKET:
+        raise HTTPException(503, "Direct upload to cloud is not configured (GCS_UPLOAD_BUCKET)")
+    _validate_file(original_filename, 0)  # size not known; extension check only
+    fid: int | None = None
+    if folder_id and str(folder_id).strip():
+        try:
+            fid = int(folder_id)
+        except ValueError:
+            pass
+    gcs_uri = f"gs://{GCS_UPLOAD_BUCKET}/{object_name.lstrip('/')}"
+    warnings = []
+    if file_hash:
+        if is_duplicate_in_queue(file_hash):
+            warnings.append("Duplicate file already in queue")
+        if is_already_processed(file_hash):
+            warnings.append("File was already processed previously")
+    queue_id = add_to_queue(gcs_uri, original_filename, file_hash or "", folder_id=fid)
+    return {
+        "original_filename": original_filename,
+        "queue_id": queue_id,
+        "folder_id": fid,
+        "warnings": warnings if warnings else None,
+    }
 
 
 @app.post("/api/upload")
@@ -255,14 +354,30 @@ async def api_resume_queue():
 
 @app.get("/api/audio/{job_id}")
 async def get_audio(job_id: str):
-    """Serve the preprocessed WAV for a job (available after Preprocess step)."""
+    """Serve the preprocessed WAV for a job (available after Preprocess step). From local disk or GCS redirect."""
     state = get_job(job_id)
     if not state:
         raise HTTPException(404, "Job not found")
     wav_path = OUTPUT_DIR / f"{job_id}_audio.wav"
-    if not wav_path.exists():
-        raise HTTPException(404, "Audio not ready yet")
-    return FileResponse(wav_path, media_type="audio/wav")
+    if wav_path.exists():
+        return FileResponse(wav_path, media_type="audio/wav")
+    if GCS_OUTPUT_BUCKET:
+        try:
+            from google.cloud import storage
+            import datetime
+            client = storage.Client()
+            bucket = client.bucket(GCS_OUTPUT_BUCKET)
+            blob = bucket.blob(f"outputs/{job_id}_audio.wav")
+            if blob.exists():
+                url = blob.generate_signed_url(
+                    version="v4",
+                    expiration=datetime.timedelta(minutes=15),
+                    method="GET",
+                )
+                return RedirectResponse(url=url, status_code=302)
+        except Exception:
+            pass
+    raise HTTPException(404, "Audio not ready yet")
 
 
 # ----- Folders -----
@@ -378,4 +493,5 @@ async def page_search_meetings():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    from config import SERVER_HOST, SERVER_PORT
+    uvicorn.run(app, host=SERVER_HOST, port=SERVER_PORT)

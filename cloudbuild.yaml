@@ -1,0 +1,38 @@
+# Cloud Build: build image and deploy to Cloud Run.
+# Required when the trigger uses a custom service account: options.logging satisfies
+# the "build.service_account + logs" requirement (no separate logs bucket needed).
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _SERVICE_NAME: audio-pipeline
+  _REGION: us-central1
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - us-central1-docker.pkg.dev/${PROJECT_ID}/audio-pipeline/app:${SHORT_SHA}
+      - -t
+      - us-central1-docker.pkg.dev/${PROJECT_ID}/audio-pipeline/app:latest
+      - .
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - us-central1-docker.pkg.dev/${PROJECT_ID}/audio-pipeline/app:${SHORT_SHA}
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - us-central1-docker.pkg.dev/${PROJECT_ID}/audio-pipeline/app:latest
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE_NAME}
+      - --image=us-central1-docker.pkg.dev/${PROJECT_ID}/audio-pipeline/app:${SHORT_SHA}
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --max-instances=5

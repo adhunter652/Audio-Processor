@@ -85,8 +85,11 @@ Connect your GitHub repo to Cloud Run so each push to `main` builds and deploys 
 
 1. In **Cloud Build** → **Triggers**, connect your GitHub repo (first-time: **Connect repository**).
 2. **Create trigger**: name e.g. `deploy-audio-pipeline`, event **Push to a branch**, branch `^main$`.
-3. **Configuration**: **Cloud Run** (or **Docker**) — if Cloud Run, set **Service** to `audio-pipeline`, **Region** to `us-central1`, and use **Source** = repo root so it builds from the Dockerfile.
-4. Save. Each push to `main` will build and deploy.
+3. **Configuration**:
+   - **Cloud Run**: set **Service** to `audio-pipeline`, **Region** to `us-central1`, **Source** = repo root. If you set a **Service account** under Advanced, you must set **Logging** to **Cloud Logging only** (see **Troubleshooting** below if the build fails with a `service_account` / `logs_bucket` error).
+   - **Or** use **Build configuration file** with path `cloudbuild.yaml` (repo root). The repo’s `cloudbuild.yaml` sets the required logging option for custom service accounts.
+4. Ensure the Artifact Registry repo exists (once per project): `gcloud artifacts repositories create audio-pipeline --repository-format=docker --location=us-central1` (ignore if it already exists).
+5. Save. Each push to `main` will build and deploy.
 
 ---
 
@@ -312,6 +315,13 @@ Detailed Spot VM setup (instance template, startup script, IAM) is outside this 
 ---
 
 ## Troubleshooting
+
+### Build failed: `build.service_account` / `logs_bucket` (invalid argument)
+
+If the trigger fails with: *"if 'build.service_account' is specified, the build must either (a) specify 'build.logs_bucket', (b) use the REGIONAL_USER_OWNED_BUCKET ... or (c) use either CLOUD_LOGGING_ONLY / NONE logging options"*:
+
+- **Option A (Console):** Edit the trigger → **Advanced** → set **Logging** to **Cloud Logging only** (or **None**). Then save and re-run.
+- **Option B (use repo config):** In the trigger, set **Configuration** to **Build configuration file**, set the path to `cloudbuild.yaml`. The repo’s `cloudbuild.yaml` includes `options.logging: CLOUD_LOGGING_ONLY`, so the build satisfies the requirement even when a custom service account is used.
 
 ### Container failed to start and listen on PORT
 

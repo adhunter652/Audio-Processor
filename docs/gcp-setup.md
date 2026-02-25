@@ -46,10 +46,10 @@ Use a **free-tier region** so the service qualifies for Cloud Run free tier: `us
 
 **Windows:** Start **Docker Desktop** and wait until it is fully running before using `docker build` or `docker push`. If you see `open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified`, Docker Desktop is not running.
 
-From the project root (where the Dockerfile is):
+From the project root (where the Dockerfile is). *If you use the Cloud Build trigger (Section 2.2), you can skip the Artifact Registry steps.*
 
 ```bash
-# Build and push to Artifact Registry (create repo if needed)
+# Optional: build and push to Artifact Registry (create repo if needed)
 gcloud artifacts repositories create audio-pipeline --repository-format=docker --location=us-central1 2>/dev/null || true
 gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 docker build -t us-central1-docker.pkg.dev/ask-the-elect/audio-pipeline/app:latest .
@@ -78,6 +78,15 @@ gcloud run deploy audio-pipeline \
 ```
 
 After deploy, note the service URL (e.g. `https://audio-pipeline-xxxxx-uc.a.run.app`). You will use it for CORS and IAP.
+
+### 2.2 Deploy from GitHub (Cloud Build trigger)
+
+Connect your GitHub repo to Cloud Run so each push to `main` builds and deploys automatically. Cloud Build builds the image from your repo and deploys to Cloud Run; you don't create or push to Artifact Registry yourself.
+
+1. In **Cloud Build** → **Triggers**, connect your GitHub repo (first-time: **Connect repository**).
+2. **Create trigger**: name e.g. `deploy-audio-pipeline`, event **Push to a branch**, branch `^main$`.
+3. **Configuration**: **Cloud Run** (or **Docker**) — if Cloud Run, set **Service** to `audio-pipeline`, **Region** to `us-central1`, and use **Source** = repo root so it builds from the Dockerfile.
+4. Save. Each push to `main` will build and deploy.
 
 ---
 

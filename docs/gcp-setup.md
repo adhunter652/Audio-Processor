@@ -321,7 +321,22 @@ Detailed Spot VM setup (instance template, startup script, IAM) is outside this 
 If the trigger fails with: *"if 'build.service_account' is specified, the build must either (a) specify 'build.logs_bucket', (b) use the REGIONAL_USER_OWNED_BUCKET ... or (c) use either CLOUD_LOGGING_ONLY / NONE logging options"*:
 
 - **Option A (Console):** Edit the trigger → **Advanced** → set **Logging** to **Cloud Logging only** (or **None**). Then save and re-run.
-- **Option B (use repo config):** In the trigger, set **Configuration** to **Build configuration file**, set the path to `cloudbuild.yaml`. The repo’s `cloudbuild.yaml` includes `options.logging: CLOUD_LOGGING_ONLY`, so the build satisfies the requirement even when a custom service account is used.
+- **Option B (use repo config):** In the trigger, set **Configuration** to **Build configuration file**, set the path to `cloudbuild.yaml`. The repo `cloudbuild.yaml` includes `options.logging: CLOUD_LOGGING_ONLY`, so the build satisfies the requirement even when a custom service account is used.
+
+### Build failed: service account does not have permission to write logs
+
+If the build fails with *"The service account ... does not have permission to write logs to Cloud Logging"* (e.g. when using `github-deploy@...` with **Cloud Logging only**):
+
+Grant the **Logs Writer** role to the service account used by the trigger:
+
+```bash
+gcloud projects add-iam-policy-binding ask-the-elect \
+  --member="serviceAccount:github-deploy@ask-the-elect.iam.gserviceaccount.com" \
+  --role="roles/logging.logWriter"
+```
+
+Replace the service account email with the one shown in the error if different. Then re-run the trigger.
+
 
 ### Container failed to start and listen on PORT
 

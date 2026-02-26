@@ -89,7 +89,8 @@ Connect your GitHub repo to Cloud Run so each push to `main` builds and deploys 
    - **Cloud Run**: set **Service** to `audio-pipeline`, **Region** to `us-central1`, **Source** = repo root. If you set a **Service account** under Advanced, you must set **Logging** to **Cloud Logging only** (see **Troubleshooting** below if the build fails with a `service_account` / `logs_bucket` error).
    - **Or** use **Build configuration file** with path `cloudbuild.yaml` (repo root). The repo’s `cloudbuild.yaml` sets the required logging option for custom service accounts.
 4. Ensure the Artifact Registry repo exists (once per project): `gcloud artifacts repositories create audio-pipeline --repository-format=docker --location=us-central1` (ignore if it already exists).
-5. Save. Each push to `main` will build and deploy.
+5. If the trigger uses a **custom service account** (e.g. `github-deploy@...`), grant it permission to push images: **Artifact Registry Writer** and **Logs Writer** (see **Troubleshooting** for the exact `gcloud` commands if the build fails with permission errors).
+6. Save. Each push to `main` will build and deploy.
 
 ---
 
@@ -337,6 +338,19 @@ gcloud projects add-iam-policy-binding ask-the-elect \
 
 Replace the service account email with the one shown in the error if different. Then re-run the trigger.
 
+### Build failed: Permission `artifactregistry.repositories.uploadArtifacts` denied
+
+If the build fails at the **docker push** step with *"Permission 'artifactregistry.repositories.uploadArtifacts' denied on resource (or it may not exist)"*:
+
+The service account used by the trigger needs **Artifact Registry Writer** so it can push the image. Grant it (use the same service account as in your trigger, e.g. `github-deploy@...`):
+
+```bash
+gcloud projects add-iam-policy-binding ask-the-elect \
+  --member="serviceAccount:github-deploy@ask-the-elect.iam.gserviceaccount.com" \
+  --role="roles/artifactregistry.writer"
+```
+
+Ensure the Artifact Registry repo exists: `gcloud artifacts repositories create audio-pipeline --repository-format=docker --location=us-central1` (ignore if it already exists). Then re-run the trigger.
 
 ### Container failed to start and listen on PORT
 

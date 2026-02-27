@@ -1,4 +1,7 @@
-# Google Cloud Setup Instructions
+414# Google Cloud Setup Instructions0=============================3e
+-+=-+
+ ed4r-xrrrrrrrrrrrrrrrrrrrrrrrrd+
+ --------------------- -e4 ec 
 
 This guide walks through everything you need to configure on Google Cloud for the Audio Processing Pipeline, following [project-phases.md](project-phases.md). Do these in order if you are setting up from scratch.
 
@@ -259,13 +262,29 @@ gcloud run services update audio-pipeline --region us-central1 \
 
 ## 8. Phase 3: Identity-Aware Proxy (IAP)
 
+**IAP requirements:** The project must be inside a **Google Cloud organization**, and every user you add must belong to that **same organization** (e.g. same Google Workspace or Cloud Identity domain). Personal Gmail/consumer accounts or users from another org will get *"do not belong to a permitted customer"*. If your project is a personal project (no organization), use the **Cloud Run Invoker** option at the end of this section instead of IAP.
+
 1. In **Cloud Run**, open your service → **Security** tab.
 2. Under **Authentication**, set to **Require authentication**.
 3. Choose **Identity-Aware Proxy (IAP)** when prompted.
 4. In **APIs & Services → OAuth consent screen**, configure the consent screen (Internal or External) and add an app name if needed.
-5. In **Security → Identity-Aware Proxy**, find the Cloud Run app and **Add principal** → add the Google accounts that may access the app → assign role **IAP-secured Web App User**.
+5. **Add users who may access the app** (this is done from Cloud Run, not from the IAP page):
+   - Stay in **Cloud Run** → your service → **Security** tab.
+   - Under **IAP**, click **Edit policy**.
+   - Add one or more principals (e.g. `user:you@your-org.com`) — only accounts in your **same organization** — and optionally the access level required.
+   - Click **Save**.
 
 Only those principals can open the Cloud Run URL; unauthenticated users are blocked before reaching the app.
+
+**Alternative if IAP is not an option (no organization or mixed identities):** Use **Require authentication** but **do not** select IAP. Then grant access via IAM using the Permissions panel (see below) and assign role **Cloud Run Invoker**. Any Google account (including personal) that has `roles/run.invoker` on the service can open the URL after signing in with that Google account.
+
+**Where to find Permissions for a Cloud Run service:** The Permissions (IAM) panel is in the **right-hand info panel**, not in the main service tabs. (1) Go to [Cloud Run](https://console.cloud.google.com/run/). (2) **Check the checkbox** next to your service name (do not click the service name itself, or you only see Revisions, Metrics, Logs, Security). (3) On the **right side**, open the info panel—if you don’t see it, click **Show Info Panel** or the panel icon. (4) In that panel, open the **Permissions** tab. (5) Click **Grant access** (or **Add principal**), enter the user’s email (e.g. `user@allowed-domain.com`), choose role **Cloud Run Invoker**, and save. If the right panel still doesn’t show Permissions, use the CLI: `gcloud run services add-iam-policy-binding SERVICE_NAME --region=REGION --member="user:EMAIL" --role="roles/run.invoker"`.
+
+**Can users request access through Google?** Google Cloud does **not** provide a built-in “request access” flow where an unlisted user can ask for permission and an admin approves it from the console. Access is always granted by an admin (or by automation). To let users request access, use one of these approaches:
+
+- **Manual process:** Publish a link to a [Google Form](https://forms.google.com) (or similar) where users submit their email and reason; the form notifies you by email. When you approve, add them via the **Permissions** panel (see “Where to find Permissions” above: select the service with the checkbox → right-hand panel → Permissions → Grant access → Cloud Run Invoker) or via IAP (Security tab → IAP → Edit policy). Only principals from an allowed domain can be added if your org has Domain Restricted Sharing.
+ **Google Group:** If your org uses Google Groups, grant **Cloud Run Invoker** (or IAP access) to a group (e.g. `audio-pipeline-users@yourdomain.com`). Users request to join the group through your normal process; once they’re in the group, they can use the service without you editing IAM each time.
+- **Custom app:** Build a small “request access” page that accepts the user’s email, stores it (e.g. Firestore or Cloud SQL), and notifies an admin or creates a ticket. The admin adds the user in IAM when they approve. This is custom logic, not a Google-managed feature.
 
 ---
 
@@ -317,6 +336,67 @@ Detailed Spot VM setup (instance template, startup script, IAM) is outside this 
 
 ## Troubleshooting
 
+### IAP: "One or more users named in the policy do not belong to a permitted customer"
+
+IAP for Cloud Run only allows identities from the **same Google Cloud organization** as the project. If you see this when adding a user:
+
+- **Personal / consumer accounts** (e.g. `@gmail.com`) or accounts from another organization cannot be added to the IAP policy.
+- **Fix options:**
+  1. **Use only org accounts:** Add only users whose Google accounts belong to your organization (same Workspace or Cloud Identity domain).
+  2. **Switch to Cloud Run Invoker (no IAP):** If the project has no organization or you need to allow personal accounts:
+     - In **Cloud Run** → your service → **Security**, set authentication to **Require authentication** but **do not** choose IAP (or switch back to the non-IAP option if you already enabled IAP).
+     - Go to **Permissions** → **Grant access** and add each user (e.g. `user:friend@gmail.com`) with role **Cloud Run Invoker**.
+     - Those users can then open the service URL and sign in with their Google account; no organization required.
+     - **Note:** If your project is in an organization with **Domain Restricted Sharing** (see next entry), you can only add principals from allowed domains.
+
+### IAM: "Domain Restricted Sharing" — only principals in allowed domains can be added
+
+Your Google Cloud **organization** has the policy `constraints/iam.allowedPolicyMemberDomains` enabled. That means you can only add IAM principals (users, groups) whose email addresses are in the **allowed domains** list (e.g. your company domain like `@yourcompany.com`). Adding `@gmail.com` or another disallowed domain will fail.
+
+- **What to do:**
+  1. **Use an account from an allowed domain:** Add only users whose email is on a domain already allowed by the org (e.g. your school or org email).
+  2. **Ask an org admin to allow a domain:** An organization policy administrator can add domains to the **Domain Restricted Sharing** policy so that principals from those domains (e.g. a partner domain) can be granted access. See [Domain restricted sharing](https://cloud.google.com/resource-manager/docs/organization-policy/restricting-domains).
+  3. **Ask an org admin to grant access for you:** If you need to give a specific person access and their domain cannot be added, an admin may be able to add them via a group that is in an allowed domain, or by using a different mechanism (e.g. Identity Platform) that sits outside this IAM restriction.
+
+You cannot disable or change this policy from within the project; it is set at the organization or folder level.
+
+### Opening the Cloud Run URL in the browser shows "Access denied"
+
+**Yes — opening the Cloud Run service URL in a browser is how you access the web application.** "Access denied" usually means the service is set to **Require authentication** but the Google account you’re signed in with does **not** have permission to invoke the service.
+
+**Fix:**
+
+1. **Use the same Google account you use for the GCP project** when you open the URL (or the account you intend to grant access to).
+2. **Grant that account access** to the service:
+   - **If using IAP:** Cloud Run → your service → **Security** → under IAP, **Edit policy** → add your principal (e.g. `user:you@yourdomain.com`) and save.
+   - **If using Cloud Run Invoker (no IAP):** Use the **Permissions** panel (checkbox next to the service → right-hand panel → **Permissions** → **Grant access**) and add your email with role **Cloud Run Invoker**. Or run:
+     ```bash
+     gcloud run services add-iam-policy-binding SERVICE_NAME --region=REGION --member="user:YOUR_EMAIL" --role="roles/run.invoker"
+     ```
+     Example: `gcloud run services add-iam-policy-binding audio-pipeline --region=us-central1 --member="user:you@example.com" --role="roles/run.invoker"`.
+3. **Reload the Cloud Run URL** in the browser (or open it in an incognito window and sign in with that account). You should be prompted to sign in with Google if needed, then the app should load.
+
+**Note:** Being a project Owner or Editor does **not** automatically grant invoke permission on the service. You must add yourself (or the group you’re in) as a principal with **Cloud Run Invoker** or IAP access for that service.
+
+### "Error: Forbidden - Your client does not have permission to get URL / from this server" (even after adding Cloud Run Invoker)
+
+This message comes from Cloud Run’s auth layer. The most common cause is **IAP is still enabled**. When IAP is on, **IAP runs first** and decides who can reach the service; Cloud Run Invoker is only used by the IAP proxy to call your service. So if you added only **Cloud Run Invoker** and did not add the same users to the **IAP policy**, IAP will block the request and you get this Forbidden.
+
+**Fix:**
+
+1. **Disable IAP and use only Cloud Run Invoker** (recommended if you need personal Gmail or mixed accounts):
+   - Cloud Run → your service → **Security** tab.
+   - Under **Authentication**, change to **Require authentication** but **do not** use Identity-Aware Proxy (IAP). If you see an option like “Allow unauthenticated invocations” vs “Require authentication,” choose “Require authentication” and ensure IAP is **off** (e.g. “Use IAP” unchecked, or use the option that does not mention IAP).
+   - Save. Wait a minute, then open the service URL again in the browser. You should be prompted to **sign in with Google**; use an account that has **Cloud Run Invoker** on this service. The app should then load.
+
+2. **If you must keep IAP:** Add each allowed user in the **IAP** policy (Security → IAP → Edit policy), not only as Invoker. Only accounts from your **same organization** can be added to IAP. Personal Gmail cannot be added to IAP.
+
+3. **Ensure the browser is sending your identity:** Open the Cloud Run URL in a normal browser window (or incognito). When prompted, sign in with the exact Google account you granted Cloud Run Invoker to. If you’re not prompted to sign in, try incognito/private or another browser and sign in when asked.
+
+4. **Confirm principals:** In the **Permissions** panel (checkbox next to service → right panel → Permissions), verify the principal is exactly `user:your@gmail.com` (or your org email) with role **Cloud Run Invoker**. Fix any typo or wrong email.
+
+After disabling IAP and using only Invoker, the “permission to get URL” error should stop for accounts that have Invoker.
+
 ### Build failed: `build.service_account` / `logs_bucket` (invalid argument)
 
 If the trigger fails with: *"if 'build.service_account' is specified, the build must either (a) specify 'build.logs_bucket', (b) use the REGIONAL_USER_OWNED_BUCKET ... or (c) use either CLOUD_LOGGING_ONLY / NONE logging options"*:
@@ -356,7 +436,7 @@ Ensure the Artifact Registry repo exists: `gcloud artifacts repositories create 
 
 If a revision fails with *"The user-provided container failed to start and listen on the port defined by PORT=8080 within the allocated timeout"*:
 
-- The app defers DB/ffmpeg/queue init to a background thread so the server binds to `PORT` immediately. Redeploy with the latest code.
+- The app defers DB/ffmpeg/queue init to a background thread so the server binds to `PORT` immediately. Redeploy with the latest code. (The container image includes ffmpeg; for local runs without system ffmpeg, `requirements.txt` includes static-ffmpeg so the app can use bundled ffmpeg/ffprobe with no admin.)
 - If the instance still fails (e.g. very slow Cold SQL connection), increase the **Startup CPU boost** and/or the **Initialization timeout** in Cloud Run: **Edit & deploy new revision → Container(s) → Advanced settings** — set **Initialization timeout** (e.g. 300s). You can also raise **Maximum number of instances** so more instances can be initializing.
 
 ---

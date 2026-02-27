@@ -166,6 +166,16 @@ def check_ffmpeg_available() -> tuple[bool, str]:
     return True, ""
 
 
+def ensure_ffmpeg_available() -> tuple[bool, str]:
+    """Use system ffmpeg if on PATH; otherwise try bundled static-ffmpeg (no admin). Then return check_ffmpeg_available()."""
+    try:
+        import static_ffmpeg
+        static_ffmpeg.add_paths(weak=True)
+    except ImportError:
+        pass
+    return check_ffmpeg_available()
+
+
 def preprocess(ctx: PipelineContext, on_progress: callable = None) -> None:
     """Convert to WAV and normalize. Requires ffmpeg/ffprobe on PATH for .mp3/.mp4."""
     from config import OUTPUT_DIR
@@ -177,9 +187,9 @@ def preprocess(ctx: PipelineContext, on_progress: callable = None) -> None:
     if on_progress:
         on_progress("Loading file...", 10.0)
 
-    # .mp3 and .mp4 need ffmpeg/ffprobe (pydub uses them)
+    # .mp3 and .mp4 need ffmpeg/ffprobe (pydub uses them); ensure_ffmpeg uses bundled static-ffmpeg if no system install
     if suffix in (".mp3", ".mp4"):
-        ok, msg = check_ffmpeg_available()
+        ok, msg = ensure_ffmpeg_available()
         if not ok:
             raise FileNotFoundError(msg)
 
@@ -193,12 +203,12 @@ def preprocess(ctx: PipelineContext, on_progress: callable = None) -> None:
         else:
             raise ValueError(f"Unsupported format: {suffix}")
     except FileNotFoundError as e:
-        _, msg = check_ffmpeg_available()
+        _, msg = ensure_ffmpeg_available()
         raise FileNotFoundError(msg or str(e))
     except OSError as e:
         err = getattr(e, "winerror", None) or getattr(e, "errno", None)
         if err == 2 or "ffmpeg" in str(e).lower() or "ffprobe" in str(e).lower():
-            _, msg = check_ffmpeg_available()
+            _, msg = ensure_ffmpeg_available()
             raise FileNotFoundError(msg or "FFmpeg failed. Ensure ffmpeg and ffprobe are on PATH.")
         raise
 

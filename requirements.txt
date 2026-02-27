@@ -6,6 +6,8 @@ aiofiles>=23.2.1
 
 # Audio: Hugging Face model run locally (transformers loads distil-whisper natively)
 pydub>=0.25.1
+# Bundled ffmpeg/ffprobe for environments without system install (no admin)
+static-ffmpeg>=2.0.0
 
 # LLM: Hugging Face transformers, run locally
 torch>=2.0.0

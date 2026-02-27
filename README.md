@@ -17,13 +17,13 @@ Override via environment:
 
 ## Prerequisites: FFmpeg
 
-**FFmpeg** (and **ffprobe**) must be installed and on your **PATH** for `.mp3` and `.mp4` uploads. Without it, preprocessing will fail with a clear error; `.wav` may work if pydub can open it without ffprobe.
+**FFmpeg** (and **ffprobe**) are required for `.mp3` and `.mp4` uploads. Without them, preprocessing will fail with a clear error; `.wav` may work if pydub can open it without ffprobe.
 
-**Windows (pick one):**
+**No admin / no system install:** The project’s `requirements.txt` includes **static-ffmpeg**, which provides bundled ffmpeg/ffprobe. If you cannot install ffmpeg system-wide (e.g. no admin on Linux), just run `pip install -r requirements.txt`; the app will use the bundled binaries with no admin rights. System ffmpeg is used when available; the bundle is used only when it is not on PATH.
 
-- **Winget:** `winget install Gyan.FFmpeg` (then restart the terminal so PATH is updated).
-- **Chocolatey:** `choco install ffmpeg`.
-- **Manual:** Download from [ffmpeg.org](https://ffmpeg.org/download.html) (Windows builds), unzip, and add the `bin` folder to your system PATH.
+**With admin (optional):** You can install ffmpeg system-wide so the app uses it instead of the bundle.
+
+**Windows (pick one):** Winget: `winget install Gyan.FFmpeg` (then restart the terminal). Chocolatey: `choco install ffmpeg`. Manual: download from [ffmpeg.org](https://ffmpeg.org/download.html) (Windows builds), unzip, and add the `bin` folder to your system PATH.
 
 **macOS:** `brew install ffmpeg`  
 **Linux:** `sudo apt install ffmpeg` (Debian/Ubuntu) or equivalent.

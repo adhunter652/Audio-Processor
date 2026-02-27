@@ -33,7 +33,7 @@ from app.pipeline.runner import (
     is_already_processed,
     start_queue_worker,
 )
-from app.pipeline.steps import check_ffmpeg_available
+from app.pipeline.steps import ensure_ffmpeg_available
 from app.rag import search_transcript_segments, search_meetings
 
 logger = logging.getLogger("audio_pipeline")
@@ -58,7 +58,7 @@ def _run_startup_tasks():
     init_db()
     logger.info("Startup (background): init_db took %.3fs", time.perf_counter() - t0)
     t1 = time.perf_counter()
-    ok, msg = check_ffmpeg_available()
+    ok, msg = ensure_ffmpeg_available()
     if not ok:
         logging.getLogger("uvicorn.error").warning(
             "FFmpeg not available: %s Pipeline will fail for .mp3/.mp4 uploads. WAV may still work.", msg

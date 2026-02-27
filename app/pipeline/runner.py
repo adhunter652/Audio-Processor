@@ -134,13 +134,13 @@ _persisted_loaded: bool = False
 
 
 def _save_job_state(state: PipelineState) -> None:
-    """Persist completed, failed, or cancelled job to disk/Cloud SQL and to jobs table so it survives restarts."""
+    """Persist completed, failed, or cancelled job to disk/Cloud SQL/GCS and to jobs table so it survives restarts."""
     if state.status not in ("completed", "failed", "cancelled"):
         return
     try:
-        from config import USE_CLOUD_SQL, GCS_OUTPUT_BUCKET
+        from config import USE_CLOUD_SQL, USE_GCS_METADATA, GCS_OUTPUT_BUCKET
         from app.db import upsert_job, save_job_state
-        if USE_CLOUD_SQL:
+        if USE_CLOUD_SQL or USE_GCS_METADATA:
             save_job_state(state.job_id, state.to_persist_dict())
         else:
             JOBS_STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -156,8 +156,8 @@ def _save_job_state(state: PipelineState) -> None:
             file_hash=state.file_hash,
             status=state.status,
         )
-        # Phase 5: optional durability — upload job_state JSON to GCS when configured
-        if GCS_OUTPUT_BUCKET:
+        # Optional durability: upload job_state to GCS when using SQLite + GCS (not when already using GCS metadata)
+        if GCS_OUTPUT_BUCKET and not USE_GCS_METADATA:
             try:
                 from google.cloud import storage
                 client = storage.Client()
@@ -174,11 +174,11 @@ def _save_job_state(state: PipelineState) -> None:
 
 
 def _load_persisted_jobs() -> None:
-    """Load previously persisted jobs from disk or Cloud SQL. Parse outside the lock so /api/queue does not block."""
-    from config import USE_CLOUD_SQL
+    """Load previously persisted jobs from disk, Cloud SQL, or GCS. Parse outside the lock so /api/queue does not block."""
+    from config import USE_CLOUD_SQL, USE_GCS_METADATA
     loaded: list[tuple[PipelineState, str | None]] = []
     t0 = time.perf_counter()
-    if USE_CLOUD_SQL:
+    if USE_CLOUD_SQL or USE_GCS_METADATA:
         try:
             from app.db import load_all_job_states
             for job_id, data in load_all_job_states():
@@ -189,7 +189,7 @@ def _load_persisted_jobs() -> None:
                 except Exception as e:
                     logger.debug("Load persisted jobs: skip %s: %s", job_id, e)
         except Exception as e:
-            logger.warning("Load persisted jobs from Cloud SQL failed: %s", e)
+            logger.warning("Load persisted jobs from DB/GCS failed: %s", e)
     else:
         if not JOBS_STATE_DIR.exists():
             logger.info("Load persisted jobs: no job_state dir, skipping")

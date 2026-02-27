@@ -206,6 +206,22 @@ gcloud projects add-iam-policy-binding ask-the-elect \
   --role="roles/cloudsql.client"
 ```
 
+### 5.5 Using GCS instead of Cloud SQL (no database)
+
+To avoid Cloud SQL entirely and save cost, you can store folders, jobs, and job state in your **GCS output bucket**. The app then uses no database: metadata lives under `metadata/` and `job_state/` in that bucket.
+
+**Setup:**
+
+1. **Do not** create a Cloud SQL instance. Leave `USE_CLOUD_SQL=0` (or unset).
+2. Create and use a GCS output bucket (e.g. `ask-the-elect-outputs`) as in Phase 5.
+3. Grant the Cloud Run service account **Storage Object Admin** (or at least read/write) on that bucket. No Cloud SQL Client role or DB env vars are needed.
+4. Set only:
+   - `GCS_UPLOAD_BUCKET` (e.g. `ask-the-elect-uploads`)
+   - `GCS_OUTPUT_BUCKET` (e.g. `ask-the-elect-outputs`)
+   - Do **not** set `USE_CLOUD_SQL`, `CLOUD_SQL_CONNECTION_NAME`, or any `DB_*` variables.
+
+When `USE_CLOUD_SQL` is 0 and `GCS_OUTPUT_BUCKET` is set, the app automatically uses **GCS metadata** (folders, jobs, and job state stored as JSON in the bucket). This avoids Cloud SQL cost and is suitable for single-region, moderate-use deployments. For very high concurrency, Cloud SQL may still be preferable.
+
 ---
 
 ## 6. Secret Manager (Recommended for DB password)
@@ -237,8 +253,8 @@ Set these on the Cloud Run service (Console: **Edit & deploy new revision → Va
 |----------|----------|------------------|
 | `PORT` | Set by Cloud Run | Usually `8080` (automatic). |
 | `GCS_UPLOAD_BUCKET` | Yes (for Phase 2) | `ask-the-elect-uploads` |
-| `GCS_OUTPUT_BUCKET` | No (Phase 5) | `ask-the-elect-outputs` |
-| `USE_CLOUD_SQL` | Yes (for Cloud SQL) | `1` |
+| `GCS_OUTPUT_BUCKET` | Yes (for GCS-only); No (Phase 5 with Cloud SQL) | `ask-the-elect-outputs`. If set and `USE_CLOUD_SQL` is 0, folders/jobs/job_state are stored in this bucket (no Cloud SQL). |
+| `USE_CLOUD_SQL` | No (default 0) | `1` to use Cloud SQL; `0` or unset with `GCS_OUTPUT_BUCKET` = GCS-only metadata. |
 | `CLOUD_SQL_CONNECTION_NAME` | Yes (if Cloud SQL) | `ask-the-elect:us-central1:audio-pipeline-db` |
 | `DB_USER` | Yes (if Cloud SQL) | `appuser` |
 | `DB_PASSWORD` | Yes (if Cloud SQL) | Use Secret Manager reference if possible. |
@@ -441,15 +457,83 @@ If a revision fails with *"The user-provided container failed to start and liste
 
 ---
 
+## Reducing Cloud SQL cost (scheduled start/stop)
+
+Cloud SQL does **not** start or stop when your Cloud Run service scales; it runs (and bills) whenever the instance is on. Running it 24/7 can cost on the order of **~$0.30/day** for a small instance.
+
+**“Start only when the service is spun up”?** There is no built-in way to start Cloud SQL on the first request. Starting an instance via the API takes **several minutes**, so “start on first hit” would make the first request fail or time out. The practical approach is **scheduled** start/stop.
+
+### Option 1: Schedule start/stop (recommended)
+
+Run Cloud SQL only during hours you use the app (e.g. weekdays 9–17). That can cut cost by **~75%** vs 24/7.
+
+1. **Pub/Sub topic** for instance management:
+   ```bash
+   gcloud pubsub topics create cloud-sql-instance-mgmt
+   ```
+
+2. **Cloud Function** that starts or stops the instance when it receives a Pub/Sub message. Create a function (e.g. Python 3) triggered by `cloud-sql-instance-mgmt` with an **entry point** that:
+   - Decodes the Pub/Sub message JSON: `{"instance": "audio-pipeline-db", "project": "ask-the-elect", "action": "start"}` or `"action": "stop"`.
+   - Calls the [Cloud SQL Admin API](https://cloud.google.com/sql/docs/postgres/start-stop-restart-instance) to **patch** the instance:
+     - **start:** `settings.activationPolicy = "ALWAYS"`
+     - **stop:** `settings.activationPolicy = "NEVER"`
+   - Use the **Google Cloud SQL Admin API** (e.g. `google-api-python-client` with `sqladmin`), and grant the function’s service account the **Cloud SQL Admin** role.
+
+   Example (Python 3, Cloud Functions 1st gen) for the function body:
+   ```python
+   import json
+   import base64
+   from google.auth import default
+   from googleapiclient.discovery import build
+
+   def start_stop_cloud_sql(event, context):
+       data = json.loads(base64.b64decode(event['data']).decode())
+       project = data['project']
+       instance = data['instance']
+       action = data['action']
+       credentials, _ = default(scopes=['https://www.googleapis.com/auth/cloud-platform'])
+       service = build('sqladmin', 'v1beta4', credentials=credentials)
+       activation = 'ALWAYS' if action == 'start' else 'NEVER'
+       service.instances().patch(
+           project=project, instance=instance,
+           body={'settings': {'activationPolicy': activation}}
+       ).execute()
+   ```
+   Dependencies: `google-auth`, `google-api-python-client`. Grant the function’s service account the **Cloud SQL Admin** role.
+
+3. **Cloud Scheduler jobs** to trigger the function on a schedule:
+   - **Start** (e.g. 9:00 Mon–Fri, America/Chicago):
+     - Target: Pub/Sub, topic `cloud-sql-instance-mgmt`
+     - Message body: `{"instance": "audio-pipeline-db", "project": "ask-the-elect", "action": "start"}`
+     - Cron: `0 9 * * 1-5`
+   - **Stop** (e.g. 17:00 Mon–Fri):
+     - Same topic and message format with `"action": "stop"`
+     - Cron: `0 17 * * 1-5`
+
+If you use the app outside that window, either start the instance manually (Console or `gcloud sql instances patch audio-pipeline-db --activation-policy=ALWAYS`) or widen the schedule.
+
+### Option 2: Manual start/stop
+
+When you’re not using the app, stop the instance from the [Cloud SQL console](https://console.cloud.google.com/sql) or:
+
+```bash
+# Stop (no charge while stopped; storage still billed)
+gcloud sql instances patch audio-pipeline-db --activation-policy=NEVER
+
+# Start when you need it again (takes a few minutes)
+gcloud sql instances patch audio-pipeline-db --activation-policy=ALWAYS
+```
+
+---
+
 ## Checklist
 
 - [ ] APIs enabled (Run, Storage, SQL Admin, IAP; Compute if using Spot)
 - [ ] Cloud Run deployed in a free-tier region with `--max-instances=5`
 - [ ] GCS upload bucket created; CORS set; Cloud Run SA has object access
 - [ ] GCS output bucket created (optional); Cloud Run SA has object access
-- [ ] Cloud SQL instance and database created; user and password set
-- [ ] Cloud Run connected to Cloud SQL; SA has `cloudsql.client`
-- [ ] Env vars set on Cloud Run (buckets, `USE_CLOUD_SQL`, DB vars)
+- [ ] Either: Cloud SQL created and connected (SA has `cloudsql.client`), or GCS-only (no Cloud SQL; set `GCS_OUTPUT_BUCKET`, leave `USE_CLOUD_SQL` unset)
+- [ ] Env vars set on Cloud Run (buckets; if Cloud SQL: `USE_CLOUD_SQL=1` and DB vars)
 - [ ] DB password in Secret Manager and referenced in Cloud Run (recommended)
 - [ ] IAP enabled and users granted **IAP-secured Web App User**
 - [ ] Billing budget ($5) and alerts (50%, 90%, 100%) configured

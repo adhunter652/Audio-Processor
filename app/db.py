@@ -1,4 +1,5 @@
-"""Database: folders and job–folder association. Supports SQLite (local) and Cloud SQL (PostgreSQL)."""
+"""Database: folders and job–folder association. Supports SQLite (local), Cloud SQL (PostgreSQL), and GCS (storage bucket)."""
+import json
 import logging
 import threading
 import time
@@ -12,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import (
     DATABASE_PATH,
     USE_CLOUD_SQL,
+    USE_GCS_METADATA,
+    GCS_OUTPUT_BUCKET,
     CLOUD_SQL_CONNECTION_NAME,
     DB_USER,
     DB_PASSWORD,
@@ -22,6 +25,11 @@ logger = logging.getLogger("audio_pipeline.db")
 
 DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
 _lock = threading.Lock()
+
+# GCS metadata paths (when USE_GCS_METADATA)
+_GCS_FOLDERS_KEY = "metadata/folders.json"
+_GCS_JOBS_PREFIX = "metadata/jobs/"
+_GCS_JOB_STATE_PREFIX = "job_state/"
 
 # Cloud SQL connector (lazy init)
 _cloud_sql_connector = None
@@ -83,8 +91,57 @@ def _param_placeholder(pos: int) -> str:
     return "?" if not USE_CLOUD_SQL else "%s"
 
 
+# ----- GCS metadata backend (when USE_GCS_METADATA) -----
+
+def _gcs_bucket():
+    """Return the GCS bucket used for metadata. Call only when USE_GCS_METADATA."""
+    from google.cloud import storage
+    return storage.Client().bucket(GCS_OUTPUT_BUCKET)
+
+
+def _gcs_read_json(key: str) -> dict | list | None:
+    """Read a GCS object as JSON. Returns None if the object does not exist."""
+    blob = _gcs_bucket().blob(key)
+    try:
+        data = blob.download_as_string()
+        return json.loads(data.decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _gcs_write_json(key: str, data: dict | list) -> None:
+    """Write JSON to a GCS object."""
+    blob = _gcs_bucket().blob(key)
+    blob.upload_from_string(
+        json.dumps(data, indent=2),
+        content_type="application/json",
+    )
+
+
+def _gcs_list_blobs(prefix: str) -> list:
+    """List blob names with the given prefix."""
+    bucket = _gcs_bucket()
+    return [b.name for b in bucket.list_blobs(prefix=prefix)]
+
+
+def _gcs_delete(key: str) -> None:
+    """Delete a GCS object if it exists."""
+    blob = _gcs_bucket().blob(key)
+    try:
+        blob.delete()
+    except Exception:
+        pass
+
+
 def init_db() -> None:
-    """Create tables if they do not exist."""
+    """Create tables if they do not exist (SQL); or ensure GCS metadata layout exists."""
+    if USE_GCS_METADATA:
+        with _lock:
+            data = _gcs_read_json(_GCS_FOLDERS_KEY)
+            if data is None:
+                _gcs_write_json(_GCS_FOLDERS_KEY, {"next_id": 1, "folders": []})
+                logger.info("init_db: created metadata/folders.json in gs://%s", GCS_OUTPUT_BUCKET)
+        return
     with _lock:
         conn = _get_conn()
         try:
@@ -146,6 +203,14 @@ def init_db() -> None:
 def list_folders() -> list[dict]:
     """Return all folders ordered by name."""
     t0 = time.perf_counter()
+    if USE_GCS_METADATA:
+        with _lock:
+            data = _gcs_read_json(_GCS_FOLDERS_KEY)
+            out = (data.get("folders") or []) if isinstance(data, dict) else []
+        out = sorted(out, key=lambda r: (r.get("name") or "").lower())
+        elapsed = time.perf_counter() - t0
+        logger.info("list_folders: %d folders in %.3fs", len(out), elapsed)
+        return out
     with _lock:
         conn = _get_conn()
         try:
@@ -168,6 +233,20 @@ def create_folder(name: str) -> dict:
     name = (name or "").strip()
     if not name:
         raise ValueError("Folder name is required")
+    if USE_GCS_METADATA:
+        with _lock:
+            data = _gcs_read_json(_GCS_FOLDERS_KEY)
+            if not isinstance(data, dict):
+                data = {"next_id": 1, "folders": []}
+            folders = data.get("folders") or []
+            fid = data.get("next_id", 1)
+            created_at = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+            row = {"id": fid, "name": name, "created_at": created_at}
+            folders.append(row)
+            data["folders"] = folders
+            data["next_id"] = fid + 1
+            _gcs_write_json(_GCS_FOLDERS_KEY, data)
+        return row
     with _lock:
         conn = _get_conn()
         try:
@@ -194,6 +273,19 @@ def update_folder(folder_id: int, name: str) -> dict | None:
     name = (name or "").strip()
     if not name:
         raise ValueError("Folder name is required")
+    if USE_GCS_METADATA:
+        with _lock:
+            data = _gcs_read_json(_GCS_FOLDERS_KEY)
+            if not isinstance(data, dict):
+                return None
+            folders = data.get("folders") or []
+            for f in folders:
+                if f.get("id") == folder_id:
+                    f["name"] = name
+                    data["folders"] = folders
+                    _gcs_write_json(_GCS_FOLDERS_KEY, data)
+                    return f
+            return None
     with _lock:
         conn = _get_conn()
         try:
@@ -220,6 +312,34 @@ def update_folder(folder_id: int, name: str) -> dict | None:
 
 def delete_folder(folder_id: int) -> bool:
     """Delete a folder. Jobs in this folder get folder_id set to NULL. Returns True if folder existed."""
+    if USE_GCS_METADATA:
+        with _lock:
+            data = _gcs_read_json(_GCS_FOLDERS_KEY)
+            if not isinstance(data, dict):
+                return False
+            folders = data.get("folders") or []
+            found = any(f.get("id") == folder_id for f in folders)
+            if not found:
+                return False
+            # Clear folder_id on any job that had this folder
+            bucket = _gcs_bucket()
+            for key in _gcs_list_blobs(_GCS_JOBS_PREFIX):
+                if not key.endswith(".json"):
+                    continue
+                blob = bucket.blob(key)
+                try:
+                    job_data = json.loads(blob.download_as_string().decode("utf-8"))
+                    if job_data.get("folder_id") == folder_id:
+                        job_data["folder_id"] = None
+                        blob.upload_from_string(
+                            json.dumps(job_data, indent=2),
+                            content_type="application/json",
+                        )
+                except Exception:
+                    pass
+            data["folders"] = [f for f in folders if f.get("id") != folder_id]
+            _gcs_write_json(_GCS_FOLDERS_KEY, data)
+            return True
     with _lock:
         conn = _get_conn()
         try:
@@ -250,6 +370,21 @@ def upsert_job(
     status: str = "pending",
 ) -> None:
     """Insert or replace job row (for pipeline completion / persistence)."""
+    if USE_GCS_METADATA:
+        key = f"{_GCS_JOBS_PREFIX}{job_id}.json"
+        created_at = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+        with _lock:
+            existing = _gcs_read_json(key)
+            if isinstance(existing, dict) and existing.get("created_at"):
+                created_at = existing["created_at"]
+            _gcs_write_json(key, {
+                "folder_id": folder_id,
+                "original_filename": original_filename or "",
+                "file_hash": file_hash or "",
+                "status": status,
+                "created_at": created_at,
+            })
+        return
     with _lock:
         conn = _get_conn()
         try:
@@ -283,6 +418,12 @@ def upsert_job(
 
 def get_job_folder_id(job_id: str) -> int | None:
     """Return folder_id for a job, or None."""
+    if USE_GCS_METADATA:
+        key = f"{_GCS_JOBS_PREFIX}{job_id}.json"
+        data = _gcs_read_json(key)
+        if isinstance(data, dict) and data.get("folder_id") is not None:
+            return data["folder_id"]
+        return None
     with _lock:
         conn = _get_conn()
         try:
@@ -299,6 +440,11 @@ def get_job_folder_id(job_id: str) -> int | None:
 
 def delete_job(job_id: str) -> None:
     """Remove job row (when user removes job from list)."""
+    if USE_GCS_METADATA:
+        with _lock:
+            _gcs_delete(f"{_GCS_JOBS_PREFIX}{job_id}.json")
+            _gcs_delete(f"{_GCS_JOB_STATE_PREFIX}{job_id}.json")
+        return
     with _lock:
         conn = _get_conn()
         try:
@@ -313,13 +459,16 @@ def delete_job(job_id: str) -> None:
             conn.close()
 
 
-# ----- Job state (for Cloud SQL persistence of pipeline state JSON) -----
+# ----- Job state (Cloud SQL or GCS persistence of pipeline state JSON) -----
 
 def save_job_state(job_id: str, state_json: dict) -> None:
-    """Persist job state JSON (Cloud SQL only). No-op when using SQLite."""
+    """Persist job state JSON (Cloud SQL or GCS). No-op when using SQLite only."""
+    if USE_GCS_METADATA:
+        with _lock:
+            _gcs_write_json(f"{_GCS_JOB_STATE_PREFIX}{job_id}.json", state_json)
+        return
     if not USE_CLOUD_SQL:
         return
-    import json
     with _lock:
         conn = _get_conn()
         try:
@@ -336,10 +485,23 @@ def save_job_state(job_id: str, state_json: dict) -> None:
 
 
 def load_all_job_states() -> list[tuple[str, dict]]:
-    """Load all persisted job states (Cloud SQL only). Returns list of (job_id, state_dict)."""
+    """Load all persisted job states (Cloud SQL or GCS). Returns list of (job_id, state_dict)."""
+    if USE_GCS_METADATA:
+        out = []
+        bucket = _gcs_bucket()
+        for key in _gcs_list_blobs(_GCS_JOB_STATE_PREFIX):
+            if not key.endswith(".json"):
+                continue
+            job_id = key[len(_GCS_JOB_STATE_PREFIX):-5]  # strip prefix and .json
+            try:
+                data = _gcs_read_json(key)
+                if isinstance(data, dict):
+                    out.append((job_id, data))
+            except Exception:
+                pass
+        return out
     if not USE_CLOUD_SQL:
         return []
-    import json
     with _lock:
         conn = _get_conn()
         try:
@@ -361,7 +523,10 @@ def load_all_job_states() -> list[tuple[str, dict]]:
 
 
 def delete_job_state(job_id: str) -> None:
-    """Remove job state row (Cloud SQL only)."""
+    """Remove job state row (Cloud SQL or GCS)."""
+    if USE_GCS_METADATA:
+        _gcs_delete(f"{_GCS_JOB_STATE_PREFIX}{job_id}.json")
+        return
     if not USE_CLOUD_SQL:
         return
     with _lock:

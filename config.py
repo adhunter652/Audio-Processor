@@ -45,6 +45,8 @@ DB_NAME = os.getenv("DB_NAME", "")
 # GCS buckets (Phase 2: uploads; Phase 5: outputs)
 GCS_UPLOAD_BUCKET = os.getenv("GCS_UPLOAD_BUCKET", "")
 GCS_OUTPUT_BUCKET = os.getenv("GCS_OUTPUT_BUCKET", "")
+# When USE_CLOUD_SQL=0 and GCS_OUTPUT_BUCKET is set, store folders/jobs/job_state in this bucket (no Cloud SQL).
+USE_GCS_METADATA = not USE_CLOUD_SQL and bool(GCS_OUTPUT_BUCKET)
 
 # RAG: local embedding model and vector DB path
 RAG_DIR = BASE_DIR / "rag_db"

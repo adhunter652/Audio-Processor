@@ -142,6 +142,54 @@ gsutil iam ch serviceAccount:${RUN_SA}:objectAdmin gs://${BUCKET_UPLOADS}
 
 Or in the Console: **Cloud Storage → Bucket → Permissions → Grant access** → add the Cloud Run service account with role **Storage Object Admin** (or at least **Storage Object Creator** for uploads and **Storage Object Viewer** if you serve from this bucket).
 
+### 3.4 Service account key for signed URLs (required on Cloud Run)
+
+Generating **signed URLs** (for direct PUT uploads and for serving output WAV from GCS) requires credentials that have a **private key**. Cloud Run’s default credentials are token-based and cannot sign URLs. You must provide a **service account key** via the `GCS_SIGNING_KEY_JSON` environment variable.
+
+**Create the key in Google Cloud Console (manual):**
+
+1. **Open IAM → Service Accounts**  
+   - Go to [Google Cloud Console](https://console.cloud.google.com/) and select project **ask-the-elect**.  
+   - In the left menu: **IAM & Admin** → **Service accounts**.
+
+2. **Create a service account (or pick an existing one)**  
+   - Click **+ Create service account**.  
+   - **Service account name:** e.g. `gcs-signing`.  
+   - **Service account ID:** will be something like `gcs-signing@ask-the-elect.iam.gserviceaccount.com`.  
+   - Click **Create and continue**.  
+   - (Optional) Add role **Storage Object Admin** for this project or for the specific buckets; you can also grant bucket access in step 4.  
+   - Click **Done**.
+
+3. **Create a key for that service account**  
+   - On the Service accounts list, click the **email** of the service account you just created (e.g. `gcs-signing@ask-the-elect.iam.gserviceaccount.com`).  
+   - Open the **Keys** tab.  
+   - Click **Add key** → **Create new key**.  
+   - Choose **JSON**, then **Create**.  
+   - A JSON key file will download. Keep it secure and do not commit it to git.
+
+4. **Grant the service account access to your buckets**  
+   - Go to **Cloud Storage** → **Buckets**.  
+   - Open the upload bucket (e.g. `ask-the-elect-uploads`) → **Permissions** tab → **Grant access**.  
+   - **New principals:** paste the service account email (e.g. `gcs-signing@ask-the-elect.iam.gserviceaccount.com`).  
+   - **Role:** e.g. **Storage Object Admin** (or at least **Storage Object Creator** and **Storage Object Viewer**).  
+   - Save. Repeat for the output bucket (e.g. `ask-the-elect-outputs`) if you use GCS for outputs and signed WAV URLs.
+
+5. **Put the key into Secret Manager and give Cloud Run access**  
+   - Go to **Security** → **Secret Manager**.  
+   - **Create secret**: name e.g. `gcs-signing-key`, **Secret value** = paste the **entire contents** of the JSON key file you downloaded. Create.  
+   - Open the secret → **Permissions** → **Grant access**.  
+   - **New principals:** `158822246647-compute@developer.gserviceaccount.com` (your Cloud Run service account).  
+   - **Role:** **Secret Manager Secret Accessor**. Save.
+
+6. **Expose the secret as an env var on Cloud Run**  
+   - Go to **Cloud Run** → select service **audio-pipeline** → **Edit & deploy new revision**.  
+   - **Variables & Secrets** tab → **Reference a secret** → choose secret `gcs-signing-key`, set **Name** to `GCS_SIGNING_KEY_JSON`, reference method **Exposed as environment variable**.  
+   - Deploy.
+
+**If key creation is disabled:** If the Console does not let you add a key (e.g. "Key creation is not allowed"), your organization has enforced `iam.disableServiceAccountKeyCreation`. An org admin would need to allow key creation for this project or for a specific service account, or you would need a different deployment approach (e.g. server-side upload) that does not require signed URLs.
+
+**Local development:** You do not need `GCS_SIGNING_KEY_JSON` when running locally if you use `gcloud auth application-default login`; those credentials include a key and can sign URLs.
+
 ---
 
 ## 4. Phase 5: GCS Output Bucket (Optional)
@@ -253,6 +301,7 @@ Set these on the Cloud Run service (Console: **Edit & deploy new revision → Va
 |----------|----------|------------------|
 | `PORT` | Set by Cloud Run | Usually `8080` (automatic). |
 | `GCS_UPLOAD_BUCKET` | Yes (for Phase 2) | `ask-the-elect-uploads` |
+| `GCS_SIGNING_KEY_JSON` | Yes (for signed URLs on Cloud Run) | **Full JSON** of a service account key (use Secret Manager). Required for media upload and for serving output WAV from GCS. See [Section 3.4](#34-service-account-key-for-signed-urls-required-on-cloud-run) (create key manually in Console). |
 | `GCS_OUTPUT_BUCKET` | Yes (for GCS-only); No (Phase 5 with Cloud SQL) | `ask-the-elect-outputs`. If set and `USE_CLOUD_SQL` is 0, folders/jobs/job_state are stored in this bucket (no Cloud SQL). |
 | `USE_CLOUD_SQL` | No (default 0) | `1` to use Cloud SQL; `0` or unset with `GCS_OUTPUT_BUCKET` = GCS-only metadata. |
 | `CLOUD_SQL_CONNECTION_NAME` | Yes (if Cloud SQL) | `ask-the-elect:us-central1:audio-pipeline-db` |
@@ -292,7 +341,7 @@ gcloud run services update audio-pipeline --region us-central1 \
 
 Only those principals can open the Cloud Run URL; unauthenticated users are blocked before reaching the app.
 
-**Alternative if IAP is not an option (no organization or mixed identities):** Use **Require authentication** but **do not** select IAP. Then grant access via IAM using the Permissions panel (see below) and assign role **Cloud Run Invoker**. Any Google account (including personal) that has `roles/run.invoker` on the service can open the URL after signing in with that Google account.
+**Alternative if IAP is not an option (no organization or mixed identities):** Use **Require authentication** but **do not** select IAP. Then grant access via IAM using the Permissions panel (see below) and assign role **Cloud Run Invoker**. With only Invoker (no IAP), **direct browser access does not work**: the browser does not send an identity token, and Cloud Run does not show a sign-in page. Requests from the terminal (e.g. `curl` with `gcloud auth print-identity-token`) work. To allow browser access for specific users only, you must either use IAP (requires an organization) or add Google Sign-In to the web app and send the user’s ID token with each request (see troubleshooting below).
 
 **Where to find Permissions for a Cloud Run service:** The Permissions (IAM) panel is in the **right-hand info panel**, not in the main service tabs. (1) Go to [Cloud Run](https://console.cloud.google.com/run/). (2) **Check the checkbox** next to your service name (do not click the service name itself, or you only see Revisions, Metrics, Logs, Security). (3) On the **right side**, open the info panel—if you don’t see it, click **Show Info Panel** or the panel icon. (4) In that panel, open the **Permissions** tab. (5) Click **Grant access** (or **Add principal**), enter the user’s email (e.g. `user@allowed-domain.com`), choose role **Cloud Run Invoker**, and save. If the right panel still doesn’t show Permissions, use the CLI: `gcloud run services add-iam-policy-binding SERVICE_NAME --region=REGION --member="user:EMAIL" --role="roles/run.invoker"`.
 
@@ -403,7 +452,7 @@ This message comes from Cloud Run’s auth layer. The most common cause is **IAP
 1. **Disable IAP and use only Cloud Run Invoker** (recommended if you need personal Gmail or mixed accounts):
    - Cloud Run → your service → **Security** tab.
    - Under **Authentication**, change to **Require authentication** but **do not** use Identity-Aware Proxy (IAP). If you see an option like “Allow unauthenticated invocations” vs “Require authentication,” choose “Require authentication” and ensure IAP is **off** (e.g. “Use IAP” unchecked, or use the option that does not mention IAP).
-   - Save. Wait a minute, then open the service URL again in the browser. You should be prompted to **sign in with Google**; use an account that has **Cloud Run Invoker** on this service. The app should then load.
+   - Save. **Note:** With only Invoker (no IAP), opening the Cloud Run URL in a browser will still return 403, because the browser does not send an identity token. See the next subsection ("Browser returns 403 but curl works") for options.
 
 2. **If you must keep IAP:** Add each allowed user in the **IAP** policy (Security → IAP → Edit policy), not only as Invoker. Only accounts from your **same organization** can be added to IAP. Personal Gmail cannot be added to IAP.
 
@@ -412,6 +461,24 @@ This message comes from Cloud Run’s auth layer. The most common cause is **IAP
 4. **Confirm principals:** In the **Permissions** panel (checkbox next to service → right panel → Permissions), verify the principal is exactly `user:your@gmail.com` (or your org email) with role **Cloud Run Invoker**. Fix any typo or wrong email.
 
 After disabling IAP and using only Invoker, the “permission to get URL” error should stop for accounts that have Invoker.
+
+### Browser returns 403 but curl with identity token works (Invoker only, no IAP)
+
+If **allUsers** has Cloud Run Invoker (or the service is deployed with `--allow-unauthenticated`), the browser can open the URL with no sign-in. If you remove allUsers and grant **only your Gmail** (or specific users) Cloud Run Invoker, then:
+
+- **Terminal/Cloud Shell** with `curl ... -H "Authorization: bearer $(gcloud auth print-identity-token)"` works, because the request includes your identity token.
+- **Browser** returns 403, because a normal page load does **not** send any `Authorization` header. Cloud Run does not show a "Sign in with Google" page when you hit it directly; that only happens when IAP is in front of the service.
+
+**Your options:**
+
+1. **Allow unauthenticated access (allUsers Invoker)**  
+   If the service can be public (or you rely on a "secret" URL), add principal `allUsers` with role **Cloud Run Invoker** (or redeploy with `--allow-unauthenticated`). Then the browser works without sign-in.
+
+2. **Use IAP for browser sign-in**  
+   Put Identity-Aware Proxy in front of Cloud Run. Users opening the URL get a Google sign-in page; only users in your IAP policy can proceed. Requires a Google Cloud **organization** and does not support personal Gmail in the IAP policy.
+
+3. **Add Google Sign-In to the web app**  
+   Integrate [Google Identity Services](https://developers.google.com/identity/gsi/web) (or similar) in the frontend. After the user signs in, get an ID token and send it on every request: `Authorization: Bearer <id_token>`. Then Cloud Run (with only those users as Invoker) will accept the request. This works with personal Gmail and does not require an organization.
 
 ### Build failed: `build.service_account` / `logs_bucket` (invalid argument)
 
@@ -447,6 +514,12 @@ gcloud projects add-iam-policy-binding ask-the-elect \
 ```
 
 Ensure the Artifact Registry repo exists: `gcloud artifacts repositories create audio-pipeline --repository-format=docker --location=us-central1` (ignore if it already exists). Then re-run the trigger.
+
+### Upload failed: "Failed to generate signed URL ... you need a private key"
+
+If media upload fails with *"the credentials you are currently using ... just contains a token"* (or similar):
+
+Cloud Run’s default credentials cannot **sign** URLs; you need a service account key. Create a key manually in the [Google Cloud Console](https://console.cloud.google.com/) (IAM & Admin → Service accounts → select account → Keys → Add key → Create new key → JSON), store the key in Secret Manager, and set **`GCS_SIGNING_KEY_JSON`** on the Cloud Run service to that secret. See [Section 3.4](#34-service-account-key-for-signed-urls-required-on-cloud-run).
 
 ### Container failed to start and listen on PORT
 

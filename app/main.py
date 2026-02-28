@@ -13,6 +13,7 @@ from config import (
     ALLOWED_EXTENSIONS,
     BASE_DIR,
     GCS_OUTPUT_BUCKET,
+    GCS_SIGNING_KEY_JSON,
     GCS_UPLOAD_BUCKET,
     MAX_FILE_SIZE_BYTES,
     OUTPUT_DIR,
@@ -137,6 +138,22 @@ def _content_type_for_extension(suffix: str) -> str:
     return "application/octet-stream"
 
 
+def _gcs_client_for_signing():
+    """Return a storage Client that can generate signed URLs (requires a private key).
+    On Cloud Run, set GCS_SIGNING_KEY_JSON to the service account key JSON."""
+    from google.cloud import storage
+    if GCS_SIGNING_KEY_JSON:
+        import json
+        from google.oauth2 import service_account
+        try:
+            info = json.loads(GCS_SIGNING_KEY_JSON)
+        except json.JSONDecodeError as e:
+            raise ValueError("GCS_SIGNING_KEY_JSON is not valid JSON") from e
+        creds = service_account.Credentials.from_service_account_info(info)
+        return storage.Client(credentials=creds, project=info.get("project_id"))
+    return storage.Client()
+
+
 @app.post("/api/upload-url")
 async def upload_url(
     filename: str = Form(...),
@@ -154,7 +171,7 @@ async def upload_url(
     try:
         from google.cloud import storage
         import datetime
-        client = storage.Client()
+        client = _gcs_client_for_signing()
         bucket = client.bucket(GCS_UPLOAD_BUCKET)
         blob = bucket.blob(object_name)
         upload_url_val = blob.generate_signed_url(
@@ -365,7 +382,7 @@ async def get_audio(job_id: str):
         try:
             from google.cloud import storage
             import datetime
-            client = storage.Client()
+            client = _gcs_client_for_signing()
             bucket = client.bucket(GCS_OUTPUT_BUCKET)
             blob = bucket.blob(f"outputs/{job_id}_audio.wav")
             if blob.exists():

@@ -45,6 +45,8 @@ DB_NAME = os.getenv("DB_NAME", "")
 # GCS buckets (Phase 2: uploads; Phase 5: outputs)
 GCS_UPLOAD_BUCKET = os.getenv("GCS_UPLOAD_BUCKET", "")
 GCS_OUTPUT_BUCKET = os.getenv("GCS_OUTPUT_BUCKET", "")
+# Service account key JSON (required on Cloud Run for signed URLs; optional locally with gcloud auth application-default login)
+GCS_SIGNING_KEY_JSON = os.getenv("GCS_SIGNING_KEY_JSON", "").strip()
 # When USE_CLOUD_SQL=0 and GCS_OUTPUT_BUCKET is set, store folders/jobs/job_state in this bucket (no Cloud SQL).
 USE_GCS_METADATA = not USE_CLOUD_SQL and bool(GCS_OUTPUT_BUCKET)
 

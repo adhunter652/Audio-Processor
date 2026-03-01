@@ -8,6 +8,15 @@ from pathlib import Path
 # Add project root for config
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+from app.pipeline.contracts import (
+    validate_preprocess_output,
+    validate_transcribe_output,
+    log_intermediate_stats,
+    PREPROCESS_CONTRACT_VERSION,
+    TRANSCRIBE_CONTRACT_VERSION,
+    LLM_ANALYZE_CONTRACT_VERSION,
+)
+
 from pydub import AudioSegment
 from pydub.effects import normalize
 
@@ -219,6 +228,14 @@ def preprocess(ctx: PipelineContext, on_progress: callable = None) -> None:
         on_progress("Exporting WAV...", 80.0)
     audio.export(str(out_path), format="wav")
     ctx.audio_path = out_path
+    validate_preprocess_output(ctx.audio_path)
+    log_intermediate_stats(
+        "preprocess",
+        ctx.job_id,
+        contract=PREPROCESS_CONTRACT_VERSION,
+        audio_path=str(ctx.audio_path),
+        duration_seconds=len(audio) / 1000.0,
+    )
     if on_progress:
         on_progress("Done", 100.0)
 
@@ -322,6 +339,14 @@ def transcribe(ctx: PipelineContext, on_progress: callable = None, is_cancelled:
     ctx.transcription = text.strip()
     # Merge chunks so each segment has at least MIN_WORDS_PER_SEGMENT; join with commas (pause boundaries)
     ctx.timestamps = _merge_segments_by_min_words(chunks, min_words=10)
+    validate_transcribe_output(ctx.transcription, ctx.timestamps)
+    log_intermediate_stats(
+        "transcribe",
+        ctx.job_id,
+        contract=TRANSCRIBE_CONTRACT_VERSION,
+        segment_count=len(ctx.timestamps),
+        transcription_len=len(ctx.transcription),
+    )
     if on_progress:
         on_progress("Done", 100.0)
 
@@ -452,6 +477,14 @@ def analyze_llm(ctx: PipelineContext, on_progress: callable = None, is_cancelled
         ctx.truth_statements_md = _generate(
             PROMPT_TRUTH_STATEMENTS.format(transcription=text), model, tokenizer, device, max_new_tokens=1024
         )
+        log_intermediate_stats(
+            "analyze",
+            ctx.job_id,
+            contract=LLM_ANALYZE_CONTRACT_VERSION,
+            main_topic_len=len(ctx.main_topic),
+            subtopics_count=len(ctx.subtopics),
+            chunk_count=1,
+        )
         if on_progress:
             on_progress("Done", 100.0)
         return
@@ -498,5 +531,13 @@ def analyze_llm(ctx: PipelineContext, on_progress: callable = None, is_cancelled
         )
         truth_tables.append(md)
     ctx.truth_statements_md = _merge_dedup_truth_md(truth_tables)
+    log_intermediate_stats(
+        "analyze",
+        ctx.job_id,
+        contract=LLM_ANALYZE_CONTRACT_VERSION,
+        main_topic_len=len(ctx.main_topic),
+        subtopics_count=len(ctx.subtopics),
+        chunk_count=n_chunks if use_chunked else 1,
+    )
     if on_progress:
         on_progress("Done", 100.0)

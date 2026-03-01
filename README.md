@@ -49,6 +49,9 @@ Check: `ffmpeg -version` and `ffprobe -version` should run in a new terminal.
 
    ```bash
    python run.py
+   or
+   python run.py small-test.mp3
+
    ```
 
    Then open **http://localhost:8000** in your browser.

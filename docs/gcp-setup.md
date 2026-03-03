@@ -115,15 +115,15 @@ Create a file `cors.json`:
 ```json
 [
   {
-    "origin": ["https://audio-pipeline-xxxxx-uc.a.run.app"],
-    "method": ["PUT", "GET"],
-    "responseHeader": ["Content-Type"],
+    "origin": ["https://your-app-domain.com"],
+    "method": ["GET", "PUT", "OPTIONS"],
+    "responseHeader": ["Content-Type", "x-goog-resumable"],
     "maxAgeSeconds": 3600
   }
 ]
 ```
 
-Replace the origin with your actual Cloud Run service URL. Do **not** include a trailing slash.
+Replace the origin with your actual app URL (e.g. `https://asktheelect.com` or your Cloud Run URL). Do **not** include a trailing slash. **OPTIONS** is required so the browser’s preflight request for PUT uploads succeeds.
 
 Apply CORS:
 
@@ -549,6 +549,12 @@ Ensure the Artifact Registry repo exists: `gcloud artifacts repositories create 
 If media upload fails with *"the credentials you are currently using ... just contains a token"* (or similar):
 
 Cloud Run’s default credentials cannot **sign** URLs; you need a service account key. Create a key manually in the [Google Cloud Console](https://console.cloud.google.com/) (IAM & Admin → Service accounts → select account → Keys → Add key → Create new key → JSON), store the key in Secret Manager, and set **`GCS_SIGNING_KEY_JSON`** on the Cloud Run service to that secret. See [Section 3.4](#34-service-account-key-for-signed-urls-required-on-cloud-run).
+
+### App still tries to connect to Cloud SQL (cloudsql.instances.connect) but I use GCS-only
+
+If you use **GCS-only** (folders/jobs in the output bucket, no PostgreSQL), the app must **not** use Cloud SQL. Set **`USE_CLOUD_SQL=0`** (or remove the variable) on the Cloud Run service. If `USE_CLOUD_SQL` is `1` or `true`, the app will try to connect to Cloud SQL and you will see `cloudsql.instances.connect` errors in logs.
+
+In **Cloud Run** → your service → **Edit & deploy new revision** → **Variables & Secrets**: set `USE_CLOUD_SQL` to `0`, or delete the variable (default is 0). Ensure `GCS_OUTPUT_BUCKET` is set. Redeploy. Optionally remove the Cloud SQL instance from the service (**Connections** tab → remove the Cloud SQL connection) so the service does not attach the connector at all.
 
 ### Upload failed: "Failed to fetch"
 

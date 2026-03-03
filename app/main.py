@@ -543,7 +543,11 @@ async def get_audio(job_id: str):
 async def api_list_folders():
     """List all folders for dropdown and management."""
     t0 = time.perf_counter()
-    folders = list_folders()
+    try:
+        folders = list_folders()
+    except Exception as e:
+        logger.exception("GET /api/folders failed: %s", e)
+        raise HTTPException(503, "Failed to load folders. Check Cloud Run logs for details.")
     elapsed = time.perf_counter() - t0
     logger.info("GET /api/folders: %d folders in %.3fs", len(folders), elapsed)
     if elapsed > 0.2:

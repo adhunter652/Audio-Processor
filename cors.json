@@ -2,8 +2,8 @@
 [
   {
     "origin": ["https://asktheelect.com"],
-    "method": ["PUT", "GET"],
-    "responseHeader": ["Content-Type"],
+    "method": ["GET", "PUT", "OPTIONS"],
+    "responseHeader": ["Content-Type", "x-goog-resumable"],
     "maxAgeSeconds": 3600
   }
 ]

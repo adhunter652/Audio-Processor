@@ -7,11 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Union
 
-# Project root for config
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from config import GCS_UPLOAD_BUCKET, RAG_DIR
+from server.config import GCS_UPLOAD_BUCKET, RAG_DIR
 
 logger = logging.getLogger("audio_pipeline.storage")
 
@@ -204,7 +200,7 @@ def upload_rag_zip_to_gcs(bucket_name: str, zip_path: Path, prefix: str = "rag_d
 
 
 def _extract_rag_zip_to_dir(zip_path: Path, extract_dir: Path) -> bool:
-    """Extract a RAG zip into extract_dir and return True. Zip may have top-level rag_db/ or root."""
+    """Extract a RAG zip into extract_dir and copy into RAG_DIR. Zip may have top-level rag_db/ or root."""
     with zipfile.ZipFile(zip_path, "r") as zf:
         zf.extractall(extract_dir)
     source = extract_dir / "rag_db" if (extract_dir / "rag_db").exists() else extract_dir
@@ -221,10 +217,7 @@ def _extract_rag_zip_to_dir(zip_path: Path, extract_dir: Path) -> bool:
 
 
 def restore_rag_from_zip_path(zip_path: Path) -> bool:
-    """
-    Extract a RAG zip (local file) and copy contents into RAG_DIR (overwrite).
-    Returns True on success, False on failure (logs and does not raise).
-    """
+    """Extract a RAG zip (local file) and copy contents into RAG_DIR (overwrite). Returns True on success."""
     try:
         if not zip_path.exists() or not zip_path.is_file():
             logger.warning("restore_rag_from_zip_path: %s missing or not a file", zip_path)

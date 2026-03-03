@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Search transcripts – Audio Processing Pipeline</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0f0f12;
+      --surface: #18181c;
+      --border: #2a2a30;
+      --text: #e4e4e7;
+      --text-muted: #71717a;
+      --accent: #a78bfa;
+      --accent-dim: #7c3aed;
+      --success: #22c55e;
+      --radius: 10px;
+      --radius-sm: 6px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: 'DM Sans', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .layout { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem; }
+    nav {
+      margin-bottom: 1.5rem;
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+    nav a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+    nav a:hover { color: var(--accent); }
+    h1 { font-size: 1.75rem; font-weight: 700; margin: 0 0 0.5rem; }
+    .subtitle { color: var(--text-muted); font-size: 0.95rem; margin-bottom: 1.5rem; }
+    .search-row {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+    .search-row input[type="search"] {
+      flex: 1;
+      padding: 0.6rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 1rem;
+    }
+    .search-row input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .search-row button {
+      padding: 0.6rem 1.2rem;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .search-row button:hover { background: var(--accent-dim); }
+    .filter-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+    .filter-row .filter-label { font-size: 0.9rem; color: var(--text-muted); white-space: nowrap; }
+    .folder-checkboxes {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 1rem;
+    }
+    .folder-checkboxes label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.9rem;
+      cursor: pointer;
+      color: var(--text);
+    }
+    .folder-checkboxes input { margin: 0; }
+    .results { display: flex; flex-direction: column; gap: 0.75rem; }
+    .segment-card {
+      padding: 1rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    .segment-card .file { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.35rem; }
+    .segment-card .timestamp-link {
+      cursor: pointer;
+      color: var(--accent);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85em;
+      padding: 0.15rem 0.4rem;
+      border-radius: 3px;
+      text-decoration: none;
+      display: inline-block;
+      margin-right: 0.5rem;
+    }
+    .segment-card .timestamp-link:hover { background: rgba(167, 139, 250, 0.15); text-decoration: underline; }
+    .segment-card .text { margin-top: 0.35rem; }
+    .empty { color: var(--text-muted); font-style: italic; }
+    .player-bar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      padding: 0.75rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      margin-bottom: 1rem;
+    }
+    .player-bar .label { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem; }
+    audio { width: 100%; max-width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav>
+      <a href="/">Pipeline</a>
+      <a href="/search/transcripts">Search transcripts</a>
+      <a href="/search/meetings">Search meetings</a>
+    </nav>
+    <h1>Search transcripts</h1>
+    <p class="subtitle">Search transcription segments with a local RAG model. Click a timestamp to play audio from that point.</p>
+
+    <div class="search-row">
+      <input type="search" id="query" placeholder="e.g. budget, timeline, action items" />
+      <button type="button" id="searchBtn">Search</button>
+    </div>
+    <div class="filter-row">
+      <span class="filter-label">Filter by folders:</span>
+      <div class="folder-checkboxes" id="folderFilters"></div>
+    </div>
+
+    <div class="player-bar" id="playerBar" style="display: none;">
+      <div class="label" id="playerLabel">Playing</div>
+      <audio id="globalAudio" controls preload="metadata"></audio>
+    </div>
+
+    <div class="results" id="results"></div>
+  </div>
+
+  <script>
+    const API = '';
+    const resultsEl = document.getElementById('results');
+    const queryEl = document.getElementById('query');
+    const searchBtn = document.getElementById('searchBtn');
+    const playerBar = document.getElementById('playerBar');
+    const playerLabel = document.getElementById('playerLabel');
+    const globalAudio = document.getElementById('globalAudio');
+    const folderFilters = document.getElementById('folderFilters');
+
+    let foldersCache = [];
+
+    async function loadFolders() {
+      try {
+        const r = await fetch(API + '/api/folders');
+        const data = await r.json();
+        foldersCache = data.folders || [];
+        folderFilters.innerHTML = foldersCache.map(f => `
+          <label><input type="checkbox" class="folder-filter-cb" value="${f.id}" /> ${escapeHtml(f.name)}</label>
+        `).join('');
+      } catch (_) {}
+    }
+
+    function getSelectedFolderIds() {
+      return Array.from(folderFilters.querySelectorAll('.folder-filter-cb:checked')).map(cb => parseInt(cb.value, 10));
+    }
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    function formatTime(s) {
+      const m = Math.floor(s / 60);
+      const sec = Math.floor(s % 60);
+      return m + ':' + (sec < 10 ? '0' : '') + sec;
+    }
+
+    function playAt(jobId, startSec, label) {
+      const url = API + '/api/audio/' + encodeURIComponent(jobId);
+      globalAudio.src = url;
+      globalAudio.currentTime = startSec;
+      globalAudio.play().catch(() => {});
+      playerLabel.textContent = label || 'Playing';
+      playerBar.style.display = 'block';
+    }
+
+    async function doSearch() {
+      const q = (queryEl.value || '').trim();
+      if (!q) {
+        resultsEl.innerHTML = '<p class="empty">Enter a search query.</p>';
+        return;
+      }
+      resultsEl.innerHTML = '<p class="empty">Searching…</p>';
+      const fids = getSelectedFolderIds();
+      const fidsParam = fids.length ? '&folder_ids=' + encodeURIComponent(fids.join(',')) : '';
+      try {
+        const r = await fetch(API + '/api/search/transcripts?q=' + encodeURIComponent(q) + fidsParam);
+        const data = await r.json();
+        const results = data.results || [];
+        if (results.length === 0) {
+          resultsEl.innerHTML = '<p class="empty">No segments found. Process some audio first and try again.</p>';
+          return;
+        }
+        resultsEl.innerHTML = results.map(seg => {
+          const start = seg.start != null ? seg.start : 0;
+          const label = escapeHtml(seg.original_filename || seg.job_id);
+          return `
+            <div class="segment-card">
+              <div class="file">${label}</div>
+              <div>
+                <a href="#" class="timestamp-link" role="button" data-job-id="${escapeHtml(seg.job_id)}" data-start="${start}">[${formatTime(start)}]</a>
+                <span class="text">${escapeHtml(seg.text || '')}</span>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        resultsEl.querySelectorAll('.timestamp-link').forEach(link => {
+          link.addEventListener('click', (e) => {
+            e.preventDefault();
+            const jobId = link.getAttribute('data-job-id');
+            const start = parseFloat(link.getAttribute('data-start'));
+            const card = link.closest('.segment-card');
+            const label = card ? card.querySelector('.file').textContent : '';
+            playAt(jobId, start, label);
+          });
+        });
+      } catch (e) {
+        resultsEl.innerHTML = '<p class="empty">Search failed: ' + escapeHtml(e.message) + '</p>';
+      }
+    }
+
+    loadFolders();
+    searchBtn.addEventListener('click', doSearch);
+    queryEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+  </script>
+</body>
+</html>

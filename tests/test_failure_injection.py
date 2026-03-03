@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-# Project root
+# Project root on path so server and pipeline_service are importable
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -34,8 +34,8 @@ class TestFailureInjectionSampleRate(unittest.TestCase):
     )
     def test_transcribe_accepts_8khz_wav_without_crashing(self):
         from pydub import AudioSegment
-        from app.pipeline.steps import PipelineContext, transcribe
-        from app.pipeline.steps import ensure_ffmpeg_available
+        from pipeline_service.pipeline.steps import PipelineContext, transcribe
+        from pipeline_service.pipeline.steps import ensure_ffmpeg_available
 
         ok, _ = ensure_ffmpeg_available()
         self.assertTrue(ok, "FFmpeg required for this test")
@@ -74,7 +74,7 @@ class TestFailureInjectionSilentTruncation(unittest.TestCase):
     def test_long_transcript_exceeds_single_chunk_and_truncation_drops_tail(self):
         """Demonstrate that tokenizer truncation drops the end of long input."""
         from transformers import AutoTokenizer
-        from config import LLM_MODEL_NAME, LLM_MAX_INPUT_TOKENS
+        from pipeline_service.config import LLM_MODEL_NAME, LLM_MAX_INPUT_TOKENS
 
         tokenizer = AutoTokenizer.from_pretrained(LLM_MODEL_NAME, trust_remote_code=True)
         # Build a transcript long enough to exceed one chunk

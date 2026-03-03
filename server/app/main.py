@@ -1,6 +1,7 @@
 """FastAPI app: upload, status, results, folders, and search."""
 import hashlib
 import logging
+import os
 import time
 import uuid
 from pathlib import Path
@@ -10,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import (
+from server.config import (
     ALLOWED_EXTENSIONS,
     BASE_DIR,
     GCS_OUTPUT_BUCKET,
@@ -21,8 +22,8 @@ from config import (
     RAG_SEARCH_LIMIT,
     UPLOAD_DIR,
 )
-from app.db import init_db, list_folders, create_folder, update_folder, delete_folder
-from app.pipeline.runner import (
+from server.app.db import init_db, list_folders, create_folder, update_folder, delete_folder
+from server.app.pipeline.runner import (
     get_job,
     get_queue_state,
     add_to_queue,
@@ -35,9 +36,9 @@ from app.pipeline.runner import (
     is_already_processed,
     start_queue_worker,
 )
-from app.pipeline.steps import ensure_ffmpeg_available
-from app.rag import index_meeting, index_transcript_segments, search_transcript_segments, search_meetings
-from app.storage import (
+from pipeline_service.pipeline import ensure_ffmpeg_available
+from server.app.rag import index_meeting, index_transcript_segments, search_transcript_segments, search_meetings
+from server.app.storage import (
     upload_local_file,
     upload_rag_db_to_gcs,
     upload_rag_zip_to_gcs,
@@ -144,7 +145,16 @@ def _restore_rag_from_bucket_if_present() -> None:
 
 
 def _run_startup_tasks():
-    """Run DB init, ffmpeg check, RAG restore from bucket, and queue worker in a background thread so the server can bind to PORT immediately (required for Cloud Run)."""
+    """Run DB init, RAG restore from bucket, ffmpeg check, and queue worker in a background thread so the server can bind to PORT immediately (required for Cloud Run)."""
+    # Set env so pipeline_service.config uses server paths and model names
+    os.environ.setdefault("OUTPUT_DIR", str(OUTPUT_DIR))
+    from server.config import WHISPER_MODEL_NAME, LLM_MODEL_NAME, LLM_MAX_INPUT_TOKENS, LLM_CHUNK_TRANSCRIPT_TOKENS, LLM_REPETITION_PENALTY
+    os.environ.setdefault("WHISPER_MODEL", WHISPER_MODEL_NAME)
+    os.environ.setdefault("LLM_MODEL", LLM_MODEL_NAME)
+    os.environ.setdefault("LLM_MAX_INPUT_TOKENS", str(LLM_MAX_INPUT_TOKENS))
+    os.environ.setdefault("LLM_CHUNK_TRANSCRIPT_TOKENS", str(LLM_CHUNK_TRANSCRIPT_TOKENS))
+    os.environ.setdefault("LLM_REPETITION_PENALTY", str(LLM_REPETITION_PENALTY))
+
     _ensure_pipeline_logging()
     t0 = time.perf_counter()
     logger.info("Startup (background): initializing database...")
@@ -736,5 +746,5 @@ async def page_search_meetings():
 
 if __name__ == "__main__":
     import uvicorn
-    from config import SERVER_HOST, SERVER_PORT
+    from server.config import SERVER_HOST, SERVER_PORT
     uvicorn.run(app, host=SERVER_HOST, port=SERVER_PORT)

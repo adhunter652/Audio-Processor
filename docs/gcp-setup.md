@@ -556,18 +556,27 @@ If you use **GCS-only** (folders/jobs in the output bucket, no PostgreSQL), the 
 
 In **Cloud Run** → your service → **Edit & deploy new revision** → **Variables & Secrets**: set `USE_CLOUD_SQL` to `0`, or delete the variable (default is 0). Ensure `GCS_OUTPUT_BUCKET` is set. Redeploy. Optionally remove the Cloud SQL instance from the service (**Connections** tab → remove the Cloud SQL connection) so the service does not attach the connector at all.
 
-### Upload failed: "Failed to fetch"
+### Upload failed: "Failed to fetch" / "blocked by CORS policy: No 'Access-Control-Allow-Origin' header"
 
-This usually means the browser blocked a request, most often the **PUT to Google Cloud Storage** (the signed URL) due to **CORS**.
+This usually means the browser blocked the **PUT to Google Cloud Storage** (the signed URL). **You will not see this error in Cloud Run logs** — the failure is between the browser and GCS; Cloud Run only handled the earlier `/api/upload-url` call successfully.
 
-1. **Find which request fails:** Open DevTools (F12) → **Network** tab → try the upload again. See which request is red/fails: the one to your Cloud Run `/api/upload-url`, or the one to `https://storage.googleapis.com/...` (the signed URL).
-2. **If the failed request is to `storage.googleapis.com`:** Your **GCS upload bucket** CORS is wrong or missing. The bucket must allow your **exact** Cloud Run origin (no trailing slash).  
-   - Cloud Run URL example: `https://audio-pipeline-158822246647.us-central1.run.app`  
-   - In [Cloud Console](https://console.cloud.google.com/) go to **Cloud Storage → Buckets** → your upload bucket → **Permissions** (or use the CORS config).  
-   - Set CORS so the **origin** list includes your full Cloud Run URL, e.g. `https://audio-pipeline-158822246647.us-central1.run.app`. Methods must include **PUT** and **GET**; response headers at least **Content-Type**.  
-   - Via CLI: create `cors.json` with that exact origin (see [Section 3.2](#32-set-cors)), then run:  
-     `gsutil cors set cors.json gs://YOUR_UPLOAD_BUCKET`
-3. **If the failed request is to your Cloud Run service:** Check that the service is reachable (no firewall/VPN blocking it), and check **Cloud Run → Logs** for 4xx/5xx errors. The app now sends CORS headers, so cross-origin calls to the API should be allowed.
+1. **Confirm the failing request:** In DevTools → **Network**, the failed request is to `https://storage.googleapis.com/ask-the-elect-uploads/...` (the preflight OPTIONS or the PUT). That means the **upload bucket** CORS is missing or wrong.
+2. **Check what CORS is actually set on the bucket** (from your project root, with `cors.json` in place):
+   ```bash
+   gsutil cors get gs://ask-the-elect-uploads
+   ```
+   If the output is empty or doesn’t list your origin (e.g. `https://asktheelect.com`) and methods `GET`, `PUT`, `OPTIONS`, CORS is not applied correctly.
+3. **Apply CORS from the project directory that contains `cors.json`:**
+   ```bash
+   gsutil cors set cors.json gs://ask-the-elect-uploads
+   ```
+   Or with the newer CLI:
+   ```bash
+   gcloud storage buckets update gs://ask-the-elect-uploads --cors-file=cors.json
+   ```
+   Ensure `cors.json` has your real app origin (e.g. `https://asktheelect.com`), no trailing slash, and `"method": ["GET", "PUT", "OPTIONS"]`. See [Section 3.2](#32-set-cors).
+4. **Verify again:** Run `gsutil cors get gs://ask-the-elect-uploads` and confirm the config appears. Then retry the upload in the browser (hard refresh or incognito).
+5. **If the failed request is to your Cloud Run URL** (not storage.googleapis.com): check **Cloud Run → Logs** for 4xx/5xx and that the service is reachable.
 
 ### Container failed to start and listen on PORT
 

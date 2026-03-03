@@ -15,7 +15,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Server (FastAPI app) and pipeline_service (processing steps)
+COPY server ./server
+COPY pipeline_service ./pipeline_service
+
+ENV PYTHONPATH=/app
 
 # Cloud Run sets PORT at runtime; use it so the container listens on the correct port.
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+CMD ["sh", "-c", "uvicorn server.app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]

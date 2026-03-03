@@ -3,7 +3,14 @@ uploads/
 outputs/
 rag_db/
 app/data/
+server/uploads/
+server/outputs/
+server/rag_db/
+server/data/
 *.db
+
+# Mobile app (not needed in server image)
+mobile/
 
 # Git and IDE
 .git

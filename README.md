@@ -45,13 +45,14 @@ Check: `ffmpeg -version` and `ffprobe -version` should run in a new terminal.
 
 2. **Run the server**
 
-   From the project root:
+   From the project root (so `server` and `pipeline_service` are on the Python path):
 
    ```bash
-   python run.py
-   or
-   python run.py small-test.mp3
-
+   set PYTHONPATH=.   # Windows
+   # export PYTHONPATH=.   # macOS/Linux
+   python server/run.py
+   # Or process a single file via CLI:
+   python server/run.py small-test.mp3
    ```
 
    Then open **http://localhost:8000** in your browser.
@@ -90,13 +91,16 @@ Completed jobs are automatically indexed into both RAG databases. Override the e
 
 ## Project layout
 
-- `app/main.py` – FastAPI app and API routes
-- `app/pipeline/runner.py` – Pipeline orchestration and job state
-- `app/pipeline/steps.py` – Preprocess, transcribe, LLM steps (all models from Hugging Face, local)
-- `config.py` – Paths, limits, Hugging Face model names
-- `templates/index.html` – Web UI (upload, job list, step status, results)
-- `uploads/` – Uploaded files
-- `outputs/` – Preprocessed WAV and intermediates
+- **`server/`** – FastAPI app and API
+  - `server/app/main.py` – API routes (upload, status, queue, folders, search)
+  - `server/app/pipeline/runner.py` – Pipeline orchestration and job queue
+  - `server/config.py` – Paths, limits, model names
+  - `server/templates/` – Web UI (index, search pages)
+  - `server/uploads/`, `server/outputs/` – Uploads and preprocessed WAV (created at runtime)
+- **`pipeline_service/`** – Audio processing pipeline (used by server)
+  - `pipeline_service/pipeline/steps.py` – Preprocess, transcribe, LLM steps (Hugging Face, local)
+  - `pipeline_service/pipeline/contracts.py` – Step contracts and validation
+- **`mobile/`** – Reserved for Flutter mobile app (see `mobile/README.md`)
 
 ## Constraints (from project-overview)
 

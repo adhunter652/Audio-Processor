@@ -270,6 +270,35 @@ To avoid Cloud SQL entirely and save cost, you can store folders, jobs, and job 
 
 When `USE_CLOUD_SQL` is 0 and `GCS_OUTPUT_BUCKET` is set, the app automatically uses **GCS metadata** (folders, jobs, and job state stored as JSON in the bucket). This avoids Cloud SQL cost and is suitable for single-region, moderate-use deployments. For very high concurrency, Cloud SQL may still be preferable.
 
+### 5.6 Combining results: RAG and outputs in the bucket
+
+With `GCS_OUTPUT_BUCKET` set, the pipeline already uploads **output files** per job:
+
+- **WAV**: `outputs/{job_id}_audio.wav`
+- **Job state JSON**: `job_state/{job_id}.json` (or in bucket metadata when using GCS-only mode)
+
+The **RAG search index** (transcript segments and meeting topics) is stored only locally by default. To back up or combine results across runs:
+
+1. **Upload RAG and outputs to the bucket**  
+   From the web UI, use **Export to bucket → Upload RAG and outputs to bucket**. This uploads a zipped copy of the local RAG DB to `rag_db/rag_db_<timestamp>.zip` and `rag_db/latest.zip`, and syncs any missing `outputs/*.wav` and `job_state/*.json` for completed jobs.  
+   Or call `POST /api/upload-rag`; the response includes `uploaded_rag`, `latest_rag`, and `jobs_synced`.
+
+2. **Bucket layout**  
+   In the output bucket you then have:
+   - `outputs/` – preprocessed WAV files
+   - `job_state/` – per-job pipeline state JSON
+   - `rag_db/` – RAG DB snapshots (e.g. `rag_db/latest.zip`, `rag_db/rag_db_<timestamp>.zip`)
+
+3. **Restore RAG from the bucket**  
+   To replace the local RAG DB with a snapshot from the bucket (e.g. after a reset or on another instance):  
+   `POST /api/restore-rag?path=rag_db/latest.zip`  
+   This downloads the zip, extracts it, and overwrites the local `rag_db/` directory. Restart the app or avoid using RAG until the next request so the new index is used.
+
+4. **Merge multiple RAG DBs (re-index from job_state)**  
+   To combine indices from different runs without merging Chroma DBs directly, re-index from the job_state files in the bucket:  
+   `POST /api/merge-rag-from-bucket?prefix=job_state/`  
+   The app lists `job_state/*.json` in the bucket, downloads each, and for every completed job calls the same indexing logic as the pipeline (`index_transcript_segments`, `index_meeting`). The result is one local RAG that includes all jobs from the bucket’s job_state. Optional query param `prefix` defaults to `job_state/`.
+
 ---
 
 ## 6. Secret Manager (Recommended for DB password)

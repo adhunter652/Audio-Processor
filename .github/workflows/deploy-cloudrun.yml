@@ -9,7 +9,7 @@ on:
 
 permissions:
   contents: read
-  id-token: ${{ vars.DEPLOY_AUTH == 'key' && 'read' || 'write' }}
+  id-token: write   # required for WIF; unused when DEPLOY_AUTH == 'key'
 
 jobs:
   deploy:

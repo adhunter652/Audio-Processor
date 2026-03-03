@@ -139,6 +139,9 @@
     .folder-item .actions button:hover { color: var(--text); border-color: var(--accent); }
     .folder-item .actions button.danger { border-color: var(--error); color: var(--error); }
     .folder-item .actions button.danger:hover { background: rgba(239, 68, 68, 0.1); }
+    .export-section { margin-top: 2.5rem; }
+    .export-section h2 { font-size: 1.1rem; font-weight: 600; margin: 0 0 0.5rem; color: var(--text-muted); }
+    .export-status { font-size: 0.9rem; margin-top: 0.5rem; min-height: 1.5em; }
     .jobs-section { margin-top: 2.5rem; }
     .jobs-section h2 {
       font-size: 1.1rem;
@@ -380,6 +383,15 @@
         <div id="resultArea"></div>
       </div>
     </section>
+
+    <section class="export-section" id="exportSection" style="display: none;">
+      <h2>Export to bucket</h2>
+      <p class="text-muted">Upload the RAG search index and associated job outputs (WAV, job state) to the configured GCS output bucket so you can combine or back up results.</p>
+      <div class="queue-controls">
+        <button type="button" id="btnUploadRag" class="primary">Upload RAG and outputs to bucket</button>
+      </div>
+      <p id="exportStatus" class="export-status text-muted"></p>
+    </section>
   </div>
 
   <script>
@@ -486,6 +498,34 @@
 
     btnNewFolder.addEventListener('click', createFolder);
 
+    const btnUploadRag = document.getElementById('btnUploadRag');
+    const exportStatus = document.getElementById('exportStatus');
+    if (btnUploadRag) {
+      btnUploadRag.addEventListener('click', async () => {
+        if (!gcsOutputBucket) return;
+        btnUploadRag.disabled = true;
+        if (exportStatus) exportStatus.textContent = 'Uploading RAG and syncing outputs…';
+        try {
+          const r = await fetch(API + '/api/upload-rag', { method: 'POST' });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            let errMsg = r.statusText;
+            if (data.detail) errMsg = Array.isArray(data.detail) ? (data.detail[0] && data.detail[0].msg) || errMsg : data.detail;
+            if (exportStatus) exportStatus.textContent = 'Error: ' + errMsg;
+            return;
+          }
+          const msg = data.uploaded_rag
+            ? 'RAG and outputs uploaded: ' + (data.latest_rag || data.uploaded_rag) + (data.jobs_synced != null ? ', ' + data.jobs_synced + ' jobs synced.' : '.')
+            : 'Upload completed. (RAG directory was empty or upload failed.) ' + (data.jobs_synced != null ? data.jobs_synced + ' job outputs synced.' : '');
+          if (exportStatus) exportStatus.textContent = msg;
+        } catch (e) {
+          if (exportStatus) exportStatus.textContent = 'Error: ' + e.message;
+        } finally {
+          btnUploadRag.disabled = false;
+        }
+      });
+    }
+
     uploadZone.addEventListener('click', () => fileInput.click());
     uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
     uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
@@ -502,11 +542,15 @@
     });
 
     let gcsUploadEnabled = false;
+    let gcsOutputBucket = false;
     async function loadConfig() {
       try {
         const r = await fetch(API + '/api/config');
         const data = await r.json();
         gcsUploadEnabled = data.gcs_upload === true;
+        gcsOutputBucket = data.gcs_output_bucket === true;
+        const exportSection = document.getElementById('exportSection');
+        if (exportSection) exportSection.style.display = gcsOutputBucket ? 'block' : 'none';
       } catch (_) {}
     }
 

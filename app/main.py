@@ -35,7 +35,8 @@ from app.pipeline.runner import (
     start_queue_worker,
 )
 from app.pipeline.steps import ensure_ffmpeg_available
-from app.rag import search_transcript_segments, search_meetings
+from app.rag import index_meeting, index_transcript_segments, search_transcript_segments, search_meetings
+from app.storage import upload_local_file, upload_rag_db_to_gcs, restore_rag_from_gcs
 
 logger = logging.getLogger("audio_pipeline")
 app = FastAPI(title="Audio Processing Pipeline", description="Upload audio → transcribe → topics & truth statements")
@@ -103,8 +104,11 @@ _index_html: str | None = None
 
 @app.get("/api/config")
 async def api_config():
-    """Return client config (e.g. whether to use direct GCS upload)."""
-    return {"gcs_upload": bool(GCS_UPLOAD_BUCKET)}
+    """Return client config (e.g. whether to use direct GCS upload and output bucket for export)."""
+    return {
+        "gcs_upload": bool(GCS_UPLOAD_BUCKET),
+        "gcs_output_bucket": bool(GCS_OUTPUT_BUCKET),
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -367,6 +371,133 @@ async def api_resume_queue():
     """Resume the queue."""
     resume_queue()
     return {"ok": True, "paused": False}
+
+
+@app.post("/api/upload-rag")
+async def api_upload_rag():
+    """Upload RAG DB and sync associated outputs (WAV, job_state) to GCS output bucket."""
+    if not GCS_OUTPUT_BUCKET:
+        raise HTTPException(503, "GCS output bucket is not configured (GCS_OUTPUT_BUCKET)")
+    JOBS_STATE_DIR = OUTPUT_DIR / "job_state"
+    uploaded_rag = None
+    latest_rag = None
+    uploaded_outputs = []
+
+    uploaded_rag, latest_rag = upload_rag_db_to_gcs(GCS_OUTPUT_BUCKET, prefix="rag_db")
+
+    state = get_queue_state()
+    completed = [j for j in (state.get("jobs") or []) if j.get("status") == "completed"]
+    for j in completed:
+        job_id = j.get("job_id")
+        if not job_id:
+            continue
+        wav_path = OUTPUT_DIR / f"{job_id}_audio.wav"
+        if wav_path.exists():
+            try:
+                upload_local_file(
+                    wav_path,
+                    f"gs://{GCS_OUTPUT_BUCKET}/outputs/{job_id}_audio.wav",
+                    content_type="audio/wav",
+                )
+                uploaded_outputs.append(f"outputs/{job_id}_audio.wav")
+            except Exception as e:
+                logger.warning("Upload WAV to GCS for %s: %s", job_id, e)
+        state_path = JOBS_STATE_DIR / f"{job_id}.json"
+        if state_path.exists():
+            try:
+                from google.cloud import storage
+                bucket = storage.Client().bucket(GCS_OUTPUT_BUCKET)
+                blob = bucket.blob(f"job_state/{job_id}.json")
+                blob.upload_from_string(
+                    state_path.read_text(encoding="utf-8"),
+                    content_type="application/json",
+                )
+                uploaded_outputs.append(f"job_state/{job_id}.json")
+            except Exception as e:
+                logger.warning("Upload job_state to GCS for %s: %s", job_id, e)
+
+    return {
+        "uploaded_rag": uploaded_rag,
+        "latest_rag": latest_rag,
+        "uploaded_outputs": uploaded_outputs,
+        "jobs_synced": len(completed),
+    }
+
+
+@app.post("/api/restore-rag")
+async def api_restore_rag(path: str = "rag_db/latest.zip"):
+    """Restore RAG DB from a zip in the GCS output bucket (e.g. rag_db/latest.zip). Replaces local RAG_DIR contents."""
+    if not GCS_OUTPUT_BUCKET:
+        raise HTTPException(503, "GCS output bucket is not configured (GCS_OUTPUT_BUCKET)")
+    path = (path or "rag_db/latest.zip").strip().lstrip("/")
+    if not path.endswith(".zip"):
+        raise HTTPException(400, "path must be a .zip object (e.g. rag_db/latest.zip)")
+    ok = restore_rag_from_gcs(GCS_OUTPUT_BUCKET, path)
+    if not ok:
+        raise HTTPException(500, "Restore failed; check server logs")
+    return {"ok": True, "restored_from": path}
+
+
+@app.post("/api/merge-rag-from-bucket")
+async def api_merge_rag_from_bucket(prefix: str = "job_state/"):
+    """
+    Re-index job_state JSON files from the GCS output bucket into the local RAG.
+    Lists prefix (default job_state/), downloads each .json, and calls index_transcript_segments + index_meeting for completed jobs.
+    """
+    if not GCS_OUTPUT_BUCKET:
+        raise HTTPException(503, "GCS output bucket is not configured (GCS_OUTPUT_BUCKET)")
+    import json
+    from google.cloud import storage
+    prefix = (prefix or "job_state/").strip()
+    if not prefix.endswith("/"):
+        prefix = prefix + "/"
+    bucket = storage.Client().bucket(GCS_OUTPUT_BUCKET)
+    indexed = 0
+    errors = []
+    for blob in bucket.list_blobs(prefix=prefix):
+        if not blob.name.endswith(".json"):
+            continue
+        job_id = blob.name[len(prefix):-5]
+        if not job_id:
+            continue
+        try:
+            data = json.loads(blob.download_as_string().decode("utf-8"))
+        except Exception as e:
+            errors.append(f"{blob.name}: {e}")
+            continue
+        if data.get("status") != "completed":
+            continue
+        result = data.get("result") or {}
+        timestamps = result.get("timestamps") or []
+        main_topic = (result.get("main_topic") or "").strip()
+        subtopics = result.get("subtopics") or []
+        original_filename = (result.get("original_filename") or data.get("original_filename") or job_id).strip()
+        folder_id = data.get("folder_id")
+        if folder_id is not None and not isinstance(folder_id, int):
+            try:
+                folder_id = int(folder_id)
+            except (TypeError, ValueError):
+                folder_id = None
+        try:
+            if timestamps:
+                index_transcript_segments(
+                    job_id=job_id,
+                    timestamps=timestamps,
+                    original_filename=original_filename,
+                    folder_id=folder_id,
+                )
+            if main_topic or subtopics:
+                index_meeting(
+                    job_id=job_id,
+                    original_filename=original_filename,
+                    main_topic=main_topic,
+                    subtopics=subtopics if isinstance(subtopics, list) else [],
+                    folder_id=folder_id,
+                )
+            indexed += 1
+        except Exception as e:
+            errors.append(f"{job_id}: {e}")
+    return {"ok": True, "indexed": indexed, "errors": errors if errors else None}
 
 
 @app.get("/api/audio/{job_id}")

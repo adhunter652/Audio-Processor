@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -40,6 +41,14 @@ from app.storage import upload_local_file, upload_rag_db_to_gcs, restore_rag_fro
 
 logger = logging.getLogger("audio_pipeline")
 app = FastAPI(title="Audio Processing Pipeline", description="Upload audio → transcribe → topics & truth statements")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def _ensure_pipeline_logging():

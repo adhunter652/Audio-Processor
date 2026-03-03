@@ -550,6 +550,19 @@ If media upload fails with *"the credentials you are currently using ... just co
 
 Cloud Run’s default credentials cannot **sign** URLs; you need a service account key. Create a key manually in the [Google Cloud Console](https://console.cloud.google.com/) (IAM & Admin → Service accounts → select account → Keys → Add key → Create new key → JSON), store the key in Secret Manager, and set **`GCS_SIGNING_KEY_JSON`** on the Cloud Run service to that secret. See [Section 3.4](#34-service-account-key-for-signed-urls-required-on-cloud-run).
 
+### Upload failed: "Failed to fetch"
+
+This usually means the browser blocked a request, most often the **PUT to Google Cloud Storage** (the signed URL) due to **CORS**.
+
+1. **Find which request fails:** Open DevTools (F12) → **Network** tab → try the upload again. See which request is red/fails: the one to your Cloud Run `/api/upload-url`, or the one to `https://storage.googleapis.com/...` (the signed URL).
+2. **If the failed request is to `storage.googleapis.com`:** Your **GCS upload bucket** CORS is wrong or missing. The bucket must allow your **exact** Cloud Run origin (no trailing slash).  
+   - Cloud Run URL example: `https://audio-pipeline-158822246647.us-central1.run.app`  
+   - In [Cloud Console](https://console.cloud.google.com/) go to **Cloud Storage → Buckets** → your upload bucket → **Permissions** (or use the CORS config).  
+   - Set CORS so the **origin** list includes your full Cloud Run URL, e.g. `https://audio-pipeline-158822246647.us-central1.run.app`. Methods must include **PUT** and **GET**; response headers at least **Content-Type**.  
+   - Via CLI: create `cors.json` with that exact origin (see [Section 3.2](#32-set-cors)), then run:  
+     `gsutil cors set cors.json gs://YOUR_UPLOAD_BUCKET`
+3. **If the failed request is to your Cloud Run service:** Check that the service is reachable (no firewall/VPN blocking it), and check **Cloud Run → Logs** for 4xx/5xx errors. The app now sends CORS headers, so cross-origin calls to the API should be allowed.
+
 ### Container failed to start and listen on PORT
 
 If a revision fails with *"The user-provided container failed to start and listen on the port defined by PORT=8080 within the allocated timeout"*:

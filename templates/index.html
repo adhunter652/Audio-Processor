@@ -147,6 +147,7 @@
     .export-file-row input[type="file"] { font-size: 0.85rem; max-width: 320px; }
     .export-file-hint { font-size: 0.8rem; color: var(--text-muted); }
     .export-file-hint code { font-family: 'JetBrains Mono', monospace; font-size: 0.85em; }
+    .export-hint { font-size: 0.8rem; margin-top: 0.35rem; }
     .export-status { font-size: 0.9rem; margin-top: 0.5rem; min-height: 1.5em; }
     .jobs-section { margin-top: 2.5rem; }
     .jobs-section h2 {
@@ -407,7 +408,9 @@
       </div>
       <div class="queue-controls">
         <button type="button" id="btnUploadRag" class="primary">Upload RAG and outputs to bucket</button>
+        <button type="button" id="btnMergeRag" class="btn-sm">Merge RAG from bucket</button>
       </div>
+      <p class="export-hint text-muted">Merge: re-index all job_state files in the bucket into local search (then saves merged RAG to bucket).</p>
       <p id="exportStatus" class="export-status text-muted"></p>
     </section>
   </div>
@@ -553,6 +556,34 @@
           if (exportStatus) exportStatus.textContent = 'Error: ' + e.message;
         } finally {
           btnUploadRag.disabled = false;
+        }
+      });
+    }
+
+    const btnMergeRag = document.getElementById('btnMergeRag');
+    if (btnMergeRag) {
+      btnMergeRag.addEventListener('click', async () => {
+        if (!gcsOutputBucket) return;
+        btnMergeRag.disabled = true;
+        if (exportStatus) exportStatus.textContent = 'Merging RAG from bucket…';
+        try {
+          const r = await fetch(API + '/api/merge-rag-from-bucket', { method: 'POST' });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            let errMsg = r.statusText;
+            if (data.detail) errMsg = Array.isArray(data.detail) ? (data.detail[0] && data.detail[0].msg) || errMsg : data.detail;
+            if (exportStatus) exportStatus.textContent = 'Error: ' + errMsg;
+            return;
+          }
+          const parts = [];
+          if (data.indexed != null) parts.push(data.indexed + ' jobs indexed');
+          if (data.latest_rag) parts.push('saved as ' + data.latest_rag);
+          if (data.errors && data.errors.length) parts.push(data.errors.length + ' errors');
+          if (exportStatus) exportStatus.textContent = parts.length ? 'Done. ' + parts.join('; ') + '.' : 'Done.';
+        } catch (e) {
+          if (exportStatus) exportStatus.textContent = 'Error: ' + e.message;
+        } finally {
+          btnMergeRag.disabled = false;
         }
       });
     }

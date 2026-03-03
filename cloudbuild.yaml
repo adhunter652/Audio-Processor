@@ -34,5 +34,5 @@ steps:
       - --image=us-central1-docker.pkg.dev/${PROJECT_ID}/audio-pipeline/app:${SHORT_SHA}
       - --region=${_REGION}
       - --platform=managed
-      - --allow-unauthenticated
+      - --no-allow-unauthenticated
       - --max-instances=5

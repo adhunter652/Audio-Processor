@@ -44,5 +44,5 @@ jobs:
             --source . \
             --region us-central1 \
             --platform managed \
-            --allow-unauthenticated \
+            --no-allow-unauthenticated \
             --max-instances 5

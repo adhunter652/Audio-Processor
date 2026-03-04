@@ -1,0 +1,9 @@
+# Copy to key.properties and fill in. key.properties is gitignored.
+# Used for release signing. Keystore was created with:
+#   storeFile=release.keystore (in android/)
+#   alias=asktheelect
+#   storePass/keyPass=android (change in production)
+storePassword=android
+keyPassword=android
+keyAlias=asktheelect
+storeFile=release.keystore

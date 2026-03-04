@@ -1,6 +1,5 @@
-"""Web server: search over results in the output bucket. Syncs RAG from job_state on startup."""
+"""Web server: search over results in the output bucket. RAG sync is triggered manually from the home page."""
 import logging
-import time
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -13,7 +12,6 @@ from app.sync import ensure_rag_synced_with_bucket
 
 logger = logging.getLogger("web_server")
 
-# Lazy FastAPI app so we can run sync before routes are used
 _app = None
 
 
@@ -27,12 +25,6 @@ def _gcs_client_for_signing():
     info = json.loads(GCS_SIGNING_KEY_JSON)
     creds = service_account.Credentials.from_service_account_info(info)
     return storage.Client(credentials=creds, project=info.get("project_id"))
-
-
-def _run_startup():
-    """Restore RAG from bucket, merge new jobs, optionally upload updated RAG."""
-    restored, newly_indexed, errors = ensure_rag_synced_with_bucket()
-    logger.info("Startup: RAG restored=%s, newly_indexed=%d, errors=%d", restored, newly_indexed, len(errors))
 
 
 def create_app():
@@ -50,12 +42,6 @@ def create_app():
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    @_app.on_event("startup")
-    def startup():
-        """On startup: check for new output files (job_state/) and re-index RAG if needed before serving."""
-        _run_startup()
-        logger.info("Startup: RAG sync complete; server ready.")
 
     # ----- Config & folders -----
     @_app.get("/api/config")

@@ -2,8 +2,8 @@
 import logging
 from pathlib import Path
 
-from fastapi import HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import BackgroundTasks, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from config import BASE_DIR, GCS_OUTPUT_BUCKET, GCS_SIGNING_KEY_JSON, RAG_SEARCH_LIMIT
 from app.folders import list_folders
@@ -13,6 +13,7 @@ from app.sync import ensure_rag_synced_with_bucket
 logger = logging.getLogger("web_server")
 
 _app = None
+_sync_last_result = None
 
 
 def _gcs_client_for_signing():
@@ -122,11 +123,31 @@ def create_app():
         return RedirectResponse(url=url, status_code=302)
 
     # ----- Sync trigger -----
+    def _run_sync_background():
+        global _sync_last_result
+        try:
+            restored, newly_indexed, errors = ensure_rag_synced_with_bucket()
+            _sync_last_result = {"ok": True, "restored": restored, "newly_indexed": newly_indexed, "errors": errors[:20] if errors else None}
+            logger.info("Background sync complete: restored=%s, newly_indexed=%d", restored, newly_indexed)
+        except Exception as e:
+            logger.exception("Background sync failed: %s", e)
+            _sync_last_result = {"ok": False, "error": str(e)}
+
     @_app.post("/api/sync")
-    async def api_sync():
-        """Re-run RAG sync: merge new jobs from bucket and optionally upload RAG."""
-        restored, newly_indexed, errors = ensure_rag_synced_with_bucket()
-        return {"ok": True, "restored": restored, "newly_indexed": newly_indexed, "errors": errors[:20] if errors else None}
+    async def api_sync(background_tasks: BackgroundTasks, wait: bool = False):
+        """Re-run RAG sync in background; return immediately to avoid timeouts. Use ?wait=1 to block (may timeout)."""
+        if wait:
+            restored, newly_indexed, errors = ensure_rag_synced_with_bucket()
+            return {"ok": True, "restored": restored, "newly_indexed": newly_indexed, "errors": errors[:20] if errors else None}
+        background_tasks.add_task(_run_sync_background)
+        return JSONResponse(content={"ok": True, "started": True}, status_code=202)
+
+    @_app.get("/api/sync/status")
+    async def api_sync_status():
+        """Return result of the last completed background sync, if any."""
+        if _sync_last_result is None:
+            return {"status": "never_run"}
+        return {"status": "complete", "result": _sync_last_result}
 
     # ----- Search pages -----
     @_app.get("/", response_class=HTMLResponse)

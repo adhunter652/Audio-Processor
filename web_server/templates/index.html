@@ -33,6 +33,7 @@
       <a href="/search/transcripts">Search transcripts</a>
       <a href="/search/meetings">Search meetings</a>
       <button type="button" id="sync-btn" onclick="runSync()">Check outputs & re-index</button>
+      <button type="button" id="status-btn" onclick="checkSyncStatus()">Check last result</button>
     </div>
     <div id="sync-status" class="sync-status" aria-live="polite"></div>
   </div>
@@ -45,10 +46,28 @@
       status.className = 'sync-status';
       try {
         var r = await fetch('/api/sync', { method: 'POST' });
-        var data = await r.json();
-        if (!r.ok) {
-          status.textContent = 'Error: ' + (data.detail || r.statusText);
+        var text = await r.text();
+        var data = null;
+        try {
+          data = text ? JSON.parse(text) : null;
+        } catch (_) {
+          status.textContent = r.ok ? 'Invalid response from server.' : 'Error: ' + (text.slice(0, 200) || r.statusText);
           status.className = 'sync-status error';
+          return;
+        }
+        if (!r.ok) {
+          status.textContent = 'Error: ' + (data && data.detail ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)) : text || r.statusText);
+          status.className = 'sync-status error';
+          return;
+        }
+        if (!data || typeof data.ok === 'undefined') {
+          status.textContent = 'Unexpected response from server.';
+          status.className = 'sync-status error';
+          return;
+        }
+        if (data.started) {
+          status.textContent = 'Re-indexing started in background. This may take a few minutes. You can leave this page; run again later to see results.';
+          status.className = 'sync-status success';
           return;
         }
         var parts = [];
@@ -62,6 +81,47 @@
         status.className = 'sync-status error';
       } finally {
         btn.disabled = false;
+      }
+    }
+    async function checkSyncStatus() {
+      var status = document.getElementById('sync-status');
+      status.textContent = 'Checking…';
+      status.className = 'sync-status';
+      try {
+        var r = await fetch('/api/sync/status');
+        var text = await r.text();
+        var data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (_) {}
+        if (!data) {
+          status.textContent = 'Could not load status.';
+          status.className = 'sync-status error';
+          return;
+        }
+        if (data.status === 'never_run') {
+          status.textContent = 'No re-index has been run yet. Click "Check outputs & re-index" to start.';
+          status.className = 'sync-status';
+          return;
+        }
+        if (data.status === 'complete' && data.result) {
+          var res = data.result;
+          if (!res.ok) {
+            status.textContent = 'Last run failed: ' + (res.error || 'Unknown error');
+            status.className = 'sync-status error';
+            return;
+          }
+          var parts = [];
+          if (res.restored) parts.push('RAG restored from bucket');
+          parts.push(res.newly_indexed + ' job(s) newly indexed');
+          if (res.errors && res.errors.length) parts.push(res.errors.length + ' error(s)');
+          status.textContent = 'Last run: ' + parts.join('. ');
+          status.className = 'sync-status success';
+          return;
+        }
+        status.textContent = 'Re-index is still running. Try again in a moment.';
+        status.className = 'sync-status';
+      } catch (e) {
+        status.textContent = 'Request failed: ' + e.message;
+        status.className = 'sync-status error';
       }
     }
   </script>

@@ -1,3 +1,5 @@
+import 'dart:developer' as dev;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -45,13 +47,18 @@ class LoginScreen extends StatelessWidget {
   }
 
   Future<void> _signInWithGoogle(BuildContext context) async {
+    dev.log('LoginScreen: Sign in with Google tapped', name: 'LoginScreen');
     final repo = context.read<AuthRepository>();
     final result = await repo.signInWithGoogle();
     if (!context.mounted) return;
     if (result.isError && result.failureOrNull != null) {
+      final msg = ErrorHandler.message(result.failureOrNull!);
+      dev.log('LoginScreen: sign-in failed: $msg', name: 'LoginScreen');
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(ErrorHandler.message(result.failureOrNull!))),
+        SnackBar(content: Text(msg)),
       );
+    } else {
+      dev.log('LoginScreen: sign-in succeeded', name: 'LoginScreen');
     }
   }
 }

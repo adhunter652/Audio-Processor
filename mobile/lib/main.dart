@@ -1,3 +1,5 @@
+import 'dart:developer' as dev;
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -13,6 +15,7 @@ import 'features/search/presentation/state/providers/search_provider.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+  dev.log('main: Firebase initialized. For Google Sign-In, ensure Debug SHA-1 is in Firebase (see instructions/firebase-google-signin-setup.md).', name: 'main');
   runApp(const MyApp());
 }
 

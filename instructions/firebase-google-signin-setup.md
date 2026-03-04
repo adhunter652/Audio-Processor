@@ -18,9 +18,9 @@ This document describes how to configure **Firebase** and **Google Sign-In** so 
 
 1. In the Firebase project, click the **Android** icon to add an Android app.
 2. **Android package name**: use the value from `mobile/android/app/build.gradle.kts` (e.g. `com.example.mobile`).
-3. (Optional) App nickname and Debug signing SHA-1 — add a debug SHA-1 for local testing:
-   - Run: `cd mobile && ./gradlew signingReport` (or on Windows: `gradlew.bat signingReport`).
-   - Copy the SHA-1 from the `debug` variant and add it in the Firebase console.
+3. **Required for Google Sign-In:** Add your **Debug signing certificate SHA-1** (and optionally SHA-256):
+   - In Firebase: Project settings (gear) → Your apps → select the Android app → **Add fingerprint**.
+   - Use the **Debug** SHA-1 from your machine (see [Troubleshooting: Error 10](#sign-in-error-10-apiexception-10) below), or run `cd mobile && .\gradlew.bat signingReport` (Windows) / `./gradlew signingReport` (macOS/Linux) and copy the SHA-1 from the `debug` variant.
 4. Download **google-services.json** and place it at:
    - `mobile/android/app/google-services.json`
 5. Finish the wizard.
@@ -92,9 +92,39 @@ This document describes how to configure **Firebase** and **Google Sign-In** so 
 
 ## 8. Troubleshooting
 
+### Sign-in error 10 (ApiException: 10)
+
+**Error:** `sign_in_failed`, `com.google.android.gms.common.api.ApiException: 10`  
+
+This means the **SHA-1 fingerprint** of the keystore used to sign your app is **not registered** in Firebase. Google Sign-In will not work until you add it.
+
+**Fix:**
+
+1. Open [Firebase Console](https://console.firebase.google.com/) → your project → **Project settings** (gear icon).
+2. Under **Your apps**, select the **Android** app (package name `com.mla.asktheelect`).
+3. Click **Add fingerprint** and paste your certificate SHA-1.
+4. (Optional) Add the **SHA-256** fingerprint as well.
+5. **Re-download** `google-services.json`: same page → **Download google-services.json**. Replace `mobile/android/app/google-services.json` with it (the new file will include `oauth_client` entries; without this, Sign-In can still fail with error 10).
+6. Save and wait 1–2 minutes, then do a **clean run**: `flutter clean && flutter pub get && flutter run`. Try signing in again.
+
+**Fingerprints for this project** (from the keystores created for this app). In Firebase → Project settings → Android app (`com.mla.asktheelect`) → **Add fingerprint**, add at least the **Debug** SHA-1 when using `flutter run` (emulator or physical device).
+
+| Build    | SHA-1 | SHA-256 |
+|----------|--------|--------|
+| **Debug**   | `F7:B3:C4:08:65:8B:D2:6F:E0:F6:FC:C1:F4:BD:EA:EF:7B:7A:A8:04` | `34:E3:CE:69:4B:DD:69:5E:6D:12:47:57:87:D2:56:F0:AF:B1:17:5B:1B:CD:96:F5:3E:7C:47:C5:C6:5F:8C:4C` |
+| **Release** | `BC:E8:C5:7C:6F:BE:F2:CD:6D:AE:3E:22:D8:4F:9D:92:EA:C1:1B:0D` | `3D:79:21:BF:4F:66:F9:AE:CD:3F:C2:12:AF:79:56:72:73:5D:68:D0:EA:5C:87:50:3F:6E:8E:E6:B5:6A:25:D1` |
+
+- **Debug** (e.g. `flutter run` on emulator or **physical device**): add the **Debug** SHA-1 (and optionally SHA-256). The app is signed with the debug keystore on the machine where you run `flutter run`.
+- **Release**: add the **Release** SHA-1 when building for Play Store.
+
+If you build on a **different machine**, that machine has its own debug keystore: run `cd mobile && .\gradlew.bat signingReport` there and add the **debug** SHA-1 shown for that machine to Firebase.
+
+---
+
 | Issue | What to check |
 |-------|----------------|
-| **Google Sign-In fails on Android** | Debug SHA-1 added in Firebase (and Google Cloud OAuth client)? Correct package name? |
+| **Google Sign-In fails on Android (error 10)** | Add the **Debug** (and Release) SHA-1 in Firebase → Project settings → Android app → Add fingerprint. See above. |
+| **Google Sign-In fails on Android (other)** | Correct package name `com.mla.asktheelect`? Google provider enabled in Authentication? |
 | **Google Sign-In fails on iOS** | `GoogleService-Info.plist` in Runner target? Bundle ID matches Firebase? |
 | **Network/API errors** | Backend running? For emulator, using `10.0.2.2:8000` (Android) or `localhost:8000` (iOS sim)? |
 | **Missing firebase_options.dart** | Run `flutterfire configure` from the `mobile` directory. |

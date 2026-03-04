@@ -149,11 +149,14 @@ def create_app():
                     loop.call_soon_threadsafe(queue.put_nowait, ("done", None))
 
             sync_task = asyncio.create_task(asyncio.to_thread(run_sync))
+            # Use a short timeout so we can send heartbeats; keeps proxies from closing the stream
+            heartbeat_interval = 15.0
             while True:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=300.0)
+                    event = await asyncio.wait_for(queue.get(), timeout=heartbeat_interval)
                 except asyncio.TimeoutError:
-                    yield f"data: {json.dumps({'type': 'progress', 'message': 'Still running…'})}\n\n"
+                    # SSE comment keeps connection alive; proxies often timeout idle streams
+                    yield ": heartbeat\n\n"
                     continue
                 if event[0] == "done":
                     break

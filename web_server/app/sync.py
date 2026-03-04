@@ -100,10 +100,10 @@ def _merge_new_jobs_from_bucket(progress_callback=None):
                 )
             indexed_ids.add(job_id)
             newly_indexed += 1
+            # Persist after each job so we don't lose progress if the request times out
+            _save_indexed_job_ids(indexed_ids)
         except Exception as e:
             errors.append(f"{job_id}: {e}")
-    if newly_indexed > 0:
-        _save_indexed_job_ids(indexed_ids)
     return newly_indexed, errors
 
 

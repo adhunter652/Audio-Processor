@@ -36,4 +36,4 @@ All configuration is via environment variables. Copy `web_server/.env.example` t
 - `GET /api/result/{job_id}` – Full result from bucket `job_state/`.
 - `GET /api/audio/{job_id}` – Redirect to signed URL for WAV in `outputs/`.
 - `GET /api/folders` – Folders from bucket `metadata/folders.json`.
-- `POST /api/sync` – Trigger RAG sync (merge new jobs from bucket, upload RAG).
+- `POST /api/sync` – Run RAG sync in the foreground; streams progress as Server-Sent Events. Progress is saved after each indexed job, so if the request times out you can run sync again and it will continue from where it left off.

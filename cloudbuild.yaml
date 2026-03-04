@@ -34,6 +34,9 @@ steps:
       - '--no-allow-unauthenticated'
       - '--max-instances'
       - '5'
+      # Sync streams progress and can run for many minutes (e.g. 100+ jobs)
+      - '--timeout'
+      - '3600'
 
 images:
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/audio-pipeline/app:$BUILD_ID'

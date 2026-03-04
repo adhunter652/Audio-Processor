@@ -25,6 +25,8 @@ All configuration is via environment variables. Copy `web_server/.env.example` t
 | `GCS_OUTPUT_BUCKET` | Yes (for search/sync) | GCS bucket with `job_state/`, `outputs/`, `rag_db/`, `metadata/`. Same as the pipeline output bucket. |
 | `GCS_SIGNING_KEY_JSON` | No | Full JSON of a service account key. Needed on Cloud Run for signed URLs (`/api/audio/{job_id}`). Locally optional if using `gcloud auth application-default login`. |
 | `RAG_EMBEDDING_MODEL` | No (default: `all-MiniLM-L6-v2`) | Hugging Face model for embeddings. |
+| `RAG_EMBEDDING_CACHE` | No | Directory to cache the embedding model (default: `rag_db/embedding_model_cache`). Avoids re-downloading and HF rate limits. The Docker image pre-poplates this so Cloud Run does not hit Hugging Face at runtime. |
+| `HF_TOKEN` | No | Hugging Face token for higher rate limits when the model is not yet cached (e.g. first local run or Docker build with `--build-arg HF_TOKEN=...`). |
 | `RAG_SEARCH_LIMIT` | No (default: `20`) | Max results per search. |
 | `SERVER_HOST` / `SERVER_PORT` | No | Bind address and port. Cloud Run sets `PORT` automatically. |
 

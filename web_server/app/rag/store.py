@@ -1,9 +1,10 @@
 """ChromaDB + sentence-transformers for transcript and meeting RAG. All local."""
 from pathlib import Path
 
-from config import RAG_DIR, RAG_EMBEDDING_MODEL, RAG_SEARCH_LIMIT
+from config import RAG_DIR, RAG_EMBEDDING_CACHE, RAG_EMBEDDING_MODEL, RAG_SEARCH_LIMIT
 
 RAG_DIR.mkdir(parents=True, exist_ok=True)
+Path(RAG_EMBEDDING_CACHE).mkdir(parents=True, exist_ok=True)
 
 _COLLECTION_TRANSCRIPTS = "transcript_segments"
 _COLLECTION_MEETINGS = "meetings"
@@ -22,7 +23,10 @@ def _get_embedding_model():
         for _name in ("transformers", "sentence_transformers"):
             logging.getLogger(_name).setLevel(logging.WARNING)
         from sentence_transformers import SentenceTransformer
-        _embedding_model = SentenceTransformer(RAG_EMBEDDING_MODEL)
+        _embedding_model = SentenceTransformer(
+            RAG_EMBEDDING_MODEL,
+            cache_folder=RAG_EMBEDDING_CACHE,
+        )
     return _embedding_model
 
 

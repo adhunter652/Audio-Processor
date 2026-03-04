@@ -17,6 +17,8 @@ GCS_SIGNING_KEY_JSON = os.getenv("GCS_SIGNING_KEY_JSON", "").strip()
 # RAG: local embedding model and vector DB path
 RAG_DIR = BASE_DIR / "rag_db"
 RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+# Persistent cache for the embedding model (avoids re-downloading from Hugging Face every run/instance)
+RAG_EMBEDDING_CACHE = os.getenv("RAG_EMBEDDING_CACHE") or str(RAG_DIR / "embedding_model_cache")
 RAG_SEARCH_LIMIT = int(os.getenv("RAG_SEARCH_LIMIT", "20"))
 
 # Track which job_ids have been indexed (so we only re-index new jobs)

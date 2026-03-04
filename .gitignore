@@ -14,11 +14,23 @@ __pycache__/
 dist/
 build/
 
-# App data and runtime (config.py / runner.py)
+# Legacy app (reference only; not deployed)
+Old/
+
+# App data and runtime
 uploads/
 outputs/
 data/
 rag_db/
+web_server/rag_db/
+*.db
+*.sqlite3
+*.bin
+*.pickle
+latest/
+latest.zip
+outputs.zip
+rag_db.zip
 
 # Environment and secrets
 .env
@@ -28,6 +40,7 @@ rag_db/
 # IDE / editor
 .idea/
 .vscode/
+.cursor
 *.swp
 *.swo
 *~
@@ -41,6 +54,3 @@ Thumbs.db
 .coverage
 htmlcov/
 .tox/
-
-# Optional: Hugging Face cache if using a local path
-# .cache/

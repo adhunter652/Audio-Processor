@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Search – Audio Results</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root { --bg: #0f0f12; --surface: #18181c; --border: #2a2a30; --text: #e4e4e7; --text-muted: #71717a; --accent: #a78bfa; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); display: flex; align-items: center; justify-content: center; }
+    .card { padding: 2rem; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; max-width: 480px; }
+    h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
+    p { color: var(--text-muted); font-size: 0.95rem; margin: 0 0 1.5rem; }
+    a { color: var(--accent); text-decoration: none; display: inline-block; margin-right: 1rem; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Search results</h1>
+    <p>Search transcript segments and meetings from processed audio in the output bucket.</p>
+    <a href="/search/transcripts">Search transcripts</a>
+    <a href="/search/meetings">Search meetings</a>
+  </div>
+</body>
+</html>

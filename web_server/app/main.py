@@ -53,10 +53,9 @@ def create_app():
 
     @_app.on_event("startup")
     def startup():
-        import threading
-        t = threading.Thread(target=_run_startup, daemon=True)
-        t.start()
-        logger.info("Startup: server binding; RAG sync running in background.")
+        """On startup: check for new output files (job_state/) and re-index RAG if needed before serving."""
+        _run_startup()
+        logger.info("Startup: RAG sync complete; server ready.")
 
     # ----- Config & folders -----
     @_app.get("/api/config")

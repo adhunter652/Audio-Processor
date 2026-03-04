@@ -38,11 +38,16 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Deploy to Cloud Run
+      - name: Ensure Artifact Registry repo exists
         run: |
-          gcloud run deploy audio-pipeline \
-            --source . \
-            --region us-central1 \
-            --platform managed \
-            --no-allow-unauthenticated \
-            --max-instances 5
+          gcloud artifacts repositories create audio-pipeline \
+            --repository-format=docker \
+            --location=us-central1 \
+            --description="Cloud Run web_server images" \
+            2>/dev/null || true
+
+      - name: Build and deploy to Cloud Run
+        run: |
+          gcloud builds submit . \
+            --config=cloudbuild.yaml \
+            --region=us-central1

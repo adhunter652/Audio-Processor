@@ -1,0 +1,39 @@
+# Build and deploy web_server to Cloud Run.
+# Satisfies: when build.service_account is specified, use CLOUD_LOGGING_ONLY (see Old/docs/gcp-setup.md troubleshooting).
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  # Build the image (Dockerfile at repo root builds web_server)
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/audio-pipeline/app:$BUILD_ID'
+      - '.'
+
+  # Push to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/audio-pipeline/app:$BUILD_ID'
+
+  # Deploy to Cloud Run (same service name and options as Old app)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'audio-pipeline'
+      - '--image'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/audio-pipeline/app:$BUILD_ID'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--no-allow-unauthenticated'
+      - '--max-instances'
+      - '5'
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/audio-pipeline/app:$BUILD_ID'

@@ -35,10 +35,11 @@ def _save_indexed_job_ids(job_ids: set[str]) -> None:
     )
 
 
-def _merge_new_jobs_from_bucket() -> tuple[int, list[str]]:
+def _merge_new_jobs_from_bucket(progress_callback=None):
     """
     List job_state/*.json from GCS output bucket; for each completed job not yet in indexed set,
     index into RAG. Returns (indexed_count, errors).
+    progress_callback: optional callable(message: str) for progress updates.
     """
     if not GCS_OUTPUT_BUCKET:
         return 0, []
@@ -46,14 +47,23 @@ def _merge_new_jobs_from_bucket() -> tuple[int, list[str]]:
     prefix = "job_state/"
     bucket = storage.Client().bucket(GCS_OUTPUT_BUCKET)
     indexed_ids = _load_indexed_job_ids()
-    newly_indexed = 0
-    errors = []
-    for blob in bucket.list_blobs(prefix=prefix):
-        if not blob.name.endswith(".json"):
-            continue
+    if progress_callback:
+        progress_callback("Listing jobs in bucket…")
+    blobs = list(bucket.list_blobs(prefix=prefix))
+    job_blobs = [b for b in blobs if b.name.endswith(".json")]
+    to_index = []
+    for blob in job_blobs:
         job_id = blob.name[len(prefix):-5]
         if not job_id or job_id in indexed_ids:
             continue
+        to_index.append((blob, job_id))
+    if progress_callback:
+        progress_callback(f"Found {len(to_index)} new job(s) to index.")
+    newly_indexed = 0
+    errors = []
+    for i, (blob, job_id) in enumerate(to_index, 1):
+        if progress_callback:
+            progress_callback(f"Indexing job {i}/{len(to_index)}: {job_id}")
         try:
             data = json.loads(blob.download_as_string().decode("utf-8"))
         except Exception as e:
@@ -97,28 +107,51 @@ def _merge_new_jobs_from_bucket() -> tuple[int, list[str]]:
     return newly_indexed, errors
 
 
-def ensure_rag_synced_with_bucket() -> tuple[bool, int, list[str]]:
+def ensure_rag_synced_with_bucket(progress_callback=None) -> tuple[bool, int, list[str]]:
     """
     On startup: restore RAG from bucket if rag_db/latest.zip exists; then merge any new completed
     jobs from job_state/ into RAG; if we indexed any, upload updated RAG to bucket.
     Returns (restored_from_bucket, newly_indexed_count, errors).
+    progress_callback: optional callable(message: str) for progress updates.
     """
+    def progress(msg):
+        if progress_callback:
+            progress_callback(msg)
+        logger.info("%s", msg)
+
+    if not GCS_OUTPUT_BUCKET:
+        progress("No output bucket configured; nothing to sync.")
+        return False, 0, []
+
     restored = False
     if GCS_OUTPUT_BUCKET:
         try:
             from google.cloud import storage
+            progress("Checking for existing RAG in bucket…")
             bucket = storage.Client().bucket(GCS_OUTPUT_BUCKET)
             blob = bucket.blob("rag_db/latest.zip")
             if blob.exists():
-                logger.info("Restoring RAG from bucket (rag_db/latest.zip)...")
+                progress("Restoring RAG from bucket (rag_db/latest.zip)…")
                 if restore_rag_from_gcs(GCS_OUTPUT_BUCKET, "rag_db/latest.zip"):
                     restored = True
-                    logger.info("RAG restored from bucket")
+                    progress("RAG restored from bucket.")
+                else:
+                    progress("RAG restore failed.")
+            else:
+                progress("No existing RAG in bucket; starting fresh.")
         except Exception as e:
             logger.warning("Could not restore RAG from bucket: %s", e)
-    newly_indexed, errors = _merge_new_jobs_from_bucket()
+            if progress_callback:
+                progress_callback(f"Could not restore RAG: {e}")
+    newly_indexed, errors = _merge_new_jobs_from_bucket(progress_callback=progress_callback)
     if errors:
         logger.warning("Merge had %d errors: %s", len(errors), errors[:3])
+        if progress_callback:
+            progress_callback(f"Encountered {len(errors)} error(s) while indexing.")
     if newly_indexed > 0 and GCS_OUTPUT_BUCKET:
+        if progress_callback:
+            progress_callback("Uploading updated RAG to bucket…")
         upload_rag_db_to_gcs(GCS_OUTPUT_BUCKET, prefix="rag_db")
+        if progress_callback:
+            progress_callback("Upload complete.")
     return restored, newly_indexed, errors

@@ -1,9 +1,11 @@
-"""Web server: search over results in the output bucket. RAG sync is triggered manually from the home page."""
+"""Web server: search over results in the output bucket. RAG sync runs in foreground with streaming progress."""
+import asyncio
+import json
 import logging
 from pathlib import Path
 
-from fastapi import BackgroundTasks, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from config import BASE_DIR, GCS_OUTPUT_BUCKET, GCS_SIGNING_KEY_JSON, RAG_SEARCH_LIMIT
 from app.folders import list_folders
@@ -122,29 +124,65 @@ def create_app():
         )
         return RedirectResponse(url=url, status_code=302)
 
-    # ----- Sync trigger -----
-    def _run_sync_background():
-        global _sync_last_result
-        try:
-            restored, newly_indexed, errors = ensure_rag_synced_with_bucket()
-            _sync_last_result = {"ok": True, "restored": restored, "newly_indexed": newly_indexed, "errors": errors[:20] if errors else None}
-            logger.info("Background sync complete: restored=%s, newly_indexed=%d", restored, newly_indexed)
-        except Exception as e:
-            logger.exception("Background sync failed: %s", e)
-            _sync_last_result = {"ok": False, "error": str(e)}
-
+    # ----- Sync (foreground with streaming progress) -----
     @_app.post("/api/sync")
-    async def api_sync(background_tasks: BackgroundTasks, wait: bool = False):
-        """Re-run RAG sync in background; return immediately to avoid timeouts. Use ?wait=1 to block (may timeout)."""
-        if wait:
-            restored, newly_indexed, errors = ensure_rag_synced_with_bucket()
-            return {"ok": True, "restored": restored, "newly_indexed": newly_indexed, "errors": errors[:20] if errors else None}
-        background_tasks.add_task(_run_sync_background)
-        return JSONResponse(content={"ok": True, "started": True}, status_code=202)
+    async def api_sync():
+        """Run RAG sync in foreground and stream progress as Server-Sent Events."""
+
+        async def event_stream():
+            global _sync_last_result
+            queue = asyncio.Queue()
+            loop = asyncio.get_event_loop()
+            result_holder = []
+
+            def progress_cb(msg):
+                loop.call_soon_threadsafe(queue.put_nowait, ("progress", msg))
+
+            def run_sync():
+                try:
+                    r = ensure_rag_synced_with_bucket(progress_callback=progress_cb)
+                    result_holder.append(("ok", r))
+                except Exception as e:
+                    logger.exception("Sync failed: %s", e)
+                    result_holder.append(("error", str(e)))
+                finally:
+                    loop.call_soon_threadsafe(queue.put_nowait, ("done", None))
+
+            sync_task = asyncio.create_task(asyncio.to_thread(run_sync))
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=300.0)
+                except asyncio.TimeoutError:
+                    yield f"data: {json.dumps({'type': 'progress', 'message': 'Still running…'})}\n\n"
+                    continue
+                if event[0] == "done":
+                    break
+                yield f"data: {json.dumps({'type': 'progress', 'message': event[1]})}\n\n"
+
+            await sync_task
+            if result_holder and result_holder[0][0] == "ok":
+                restored, newly_indexed, errors = result_holder[0][1]
+                _sync_last_result = {
+                    "ok": True,
+                    "restored": restored,
+                    "newly_indexed": newly_indexed,
+                    "errors": (errors[:20] if errors else None),
+                }
+                yield f"data: {json.dumps({'type': 'result', 'ok': True, 'restored': restored, 'newly_indexed': newly_indexed, 'errors': errors[:20] if errors else None})}\n\n"
+            else:
+                err_msg = result_holder[0][1] if result_holder else "Unknown error"
+                _sync_last_result = {"ok": False, "error": err_msg}
+                yield f"data: {json.dumps({'type': 'result', 'ok': False, 'error': err_msg})}\n\n"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @_app.get("/api/sync/status")
     async def api_sync_status():
-        """Return result of the last completed background sync, if any."""
+        """Return result of the last completed sync, if any."""
         if _sync_last_result is None:
             return {"status": "never_run"}
         return {"status": "complete", "result": _sync_last_result}

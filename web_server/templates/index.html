@@ -23,6 +23,12 @@
     .sync-status { margin-top: 1rem; font-size: 0.9rem; color: var(--text-muted); }
     .sync-status.success { color: #86efac; }
     .sync-status.error { color: #fca5a5; }
+    .sync-log { margin-top: 0.75rem; padding: 0.75rem; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; font-size: 0.85rem; max-height: 220px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+    .sync-log .line { margin: 0.2em 0; }
+    .sync-log .line.result { color: var(--accent); font-weight: 500; }
+    button.syncing { opacity: 0.8; pointer-events: none; }
+    button.syncing::after { content: ''; display: inline-block; width: 1em; height: 1em; margin-left: 0.5em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -33,95 +39,88 @@
       <a href="/search/transcripts">Search transcripts</a>
       <a href="/search/meetings">Search meetings</a>
       <button type="button" id="sync-btn" onclick="runSync()">Check outputs & re-index</button>
-      <button type="button" id="status-btn" onclick="checkSyncStatus()">Check last result</button>
     </div>
     <div id="sync-status" class="sync-status" aria-live="polite"></div>
+    <div id="sync-log" class="sync-log" role="log" aria-live="polite" style="display: none;"></div>
   </div>
   <script>
     async function runSync() {
       var btn = document.getElementById('sync-btn');
       var status = document.getElementById('sync-status');
+      var logEl = document.getElementById('sync-log');
       btn.disabled = true;
-      status.textContent = 'Checking outputs and re-indexing…';
+      btn.classList.add('syncing');
+      status.textContent = 'Starting sync…';
       status.className = 'sync-status';
+      logEl.style.display = 'block';
+      logEl.innerHTML = '';
+      function addLog(msg, isResult) {
+        var line = document.createElement('div');
+        line.className = 'line' + (isResult ? ' result' : '');
+        line.textContent = msg;
+        logEl.appendChild(line);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
       try {
         var r = await fetch('/api/sync', { method: 'POST' });
-        var text = await r.text();
-        var data = null;
-        try {
-          data = text ? JSON.parse(text) : null;
-        } catch (_) {
-          status.textContent = r.ok ? 'Invalid response from server.' : 'Error: ' + (text.slice(0, 200) || r.statusText);
+        if (!r.ok || !r.body) {
+          status.textContent = 'Request failed: ' + (r.statusText || r.status);
           status.className = 'sync-status error';
           return;
         }
-        if (!r.ok) {
-          status.textContent = 'Error: ' + (data && data.detail ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)) : text || r.statusText);
-          status.className = 'sync-status error';
-          return;
+        var reader = r.body.getReader();
+        var decoder = new TextDecoder();
+        var buf = '';
+        while (true) {
+          var chunk = await reader.read();
+          if (chunk.done) break;
+          buf += decoder.decode(chunk.value, { stream: true });
+          var parts = buf.split('\n\n');
+          buf = parts.pop() || '';
+          for (var i = 0; i < parts.length; i++) {
+            var block = parts[i];
+            var dataLine = block.split('\n').find(function(l) { return l.startsWith('data: '); });
+            if (!dataLine) continue;
+            try {
+              var data = JSON.parse(dataLine.slice(6));
+              if (data.type === 'progress') {
+                addLog(data.message, false);
+              } else if (data.type === 'result') {
+                if (data.ok) {
+                  var parts2 = [];
+                  if (data.restored) parts2.push('RAG restored from bucket');
+                  parts2.push(data.newly_indexed + ' job(s) newly indexed');
+                  if (data.errors && data.errors.length) parts2.push(data.errors.length + ' error(s)');
+                  addLog('Done: ' + parts2.join('. '), true);
+                  status.textContent = 'Sync complete.';
+                  status.className = 'sync-status success';
+                } else {
+                  addLog('Error: ' + (data.error || 'Unknown error'), true);
+                  status.textContent = 'Sync failed.';
+                  status.className = 'sync-status error';
+                }
+              }
+            } catch (_) {}
+          }
         }
-        if (!data || typeof data.ok === 'undefined') {
-          status.textContent = 'Unexpected response from server.';
-          status.className = 'sync-status error';
-          return;
+        if (buf) {
+          var dataLine = buf.split('\n').find(function(l) { return l.startsWith('data: '); });
+          if (dataLine) {
+            try {
+              var data = JSON.parse(dataLine.slice(6));
+              if (data.type === 'progress') addLog(data.message, false);
+              else if (data.type === 'result' && data.ok) status.className = 'sync-status success';
+              else if (data.type === 'result' && !data.ok) status.className = 'sync-status error';
+            } catch (_) {}
+          }
         }
-        if (data.started) {
-          status.textContent = 'Re-indexing started in background. This may take a few minutes. You can leave this page; run again later to see results.';
-          status.className = 'sync-status success';
-          return;
-        }
-        var parts = [];
-        if (data.restored) parts.push('RAG restored from bucket');
-        parts.push(data.newly_indexed + ' job(s) newly indexed');
-        if (data.errors && data.errors.length) parts.push(data.errors.length + ' error(s)');
-        status.textContent = parts.join('. ');
-        status.className = 'sync-status success';
       } catch (e) {
-        status.textContent = 'Request failed: ' + e.message;
+        addLog('Request failed: ' + e.message, true);
+        status.textContent = 'Request failed.';
         status.className = 'sync-status error';
       } finally {
         btn.disabled = false;
-      }
-    }
-    async function checkSyncStatus() {
-      var status = document.getElementById('sync-status');
-      status.textContent = 'Checking…';
-      status.className = 'sync-status';
-      try {
-        var r = await fetch('/api/sync/status');
-        var text = await r.text();
-        var data = null;
-        try { data = text ? JSON.parse(text) : null; } catch (_) {}
-        if (!data) {
-          status.textContent = 'Could not load status.';
-          status.className = 'sync-status error';
-          return;
-        }
-        if (data.status === 'never_run') {
-          status.textContent = 'No re-index has been run yet. Click "Check outputs & re-index" to start.';
-          status.className = 'sync-status';
-          return;
-        }
-        if (data.status === 'complete' && data.result) {
-          var res = data.result;
-          if (!res.ok) {
-            status.textContent = 'Last run failed: ' + (res.error || 'Unknown error');
-            status.className = 'sync-status error';
-            return;
-          }
-          var parts = [];
-          if (res.restored) parts.push('RAG restored from bucket');
-          parts.push(res.newly_indexed + ' job(s) newly indexed');
-          if (res.errors && res.errors.length) parts.push(res.errors.length + ' error(s)');
-          status.textContent = 'Last run: ' + parts.join('. ');
-          status.className = 'sync-status success';
-          return;
-        }
-        status.textContent = 'Re-index is still running. Try again in a moment.';
-        status.className = 'sync-status';
-      } catch (e) {
-        status.textContent = 'Request failed: ' + e.message;
-        status.className = 'sync-status error';
+        btn.classList.remove('syncing');
       }
     }
   </script>

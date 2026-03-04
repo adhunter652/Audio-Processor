@@ -151,7 +151,15 @@ def ensure_rag_synced_with_bucket(progress_callback=None) -> tuple[bool, int, li
     if newly_indexed > 0 and GCS_OUTPUT_BUCKET:
         if progress_callback:
             progress_callback("Uploading updated RAG to bucket…")
-        upload_rag_db_to_gcs(GCS_OUTPUT_BUCKET, prefix="rag_db")
-        if progress_callback:
-            progress_callback("Upload complete.")
+        uploaded_path, latest_path = upload_rag_db_to_gcs(
+            GCS_OUTPUT_BUCKET, prefix="rag_db", progress_callback=progress_callback
+        )
+        if (uploaded_path, latest_path) != (None, None):
+            if progress_callback:
+                progress_callback("Upload complete.")
+        else:
+            logger.error("RAG upload to bucket failed; upload_rag_db_to_gcs returned (None, None)")
+            if progress_callback:
+                progress_callback("RAG upload to bucket failed. Check server logs for details.")
+            errors.append("RAG upload to bucket failed")
     return restored, newly_indexed, errors

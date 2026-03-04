@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "802244164633",
-    "project_id": "ask-the-elect-bfa69",
-    "storage_bucket": "ask-the-elect-bfa69.firebasestorage.app"
+    "project_number": "YOUR_PROJECT_NUMBER",
+    "project_id": "YOUR_PROJECT_ID",
+    "storage_bucket": "YOUR_PROJECT_ID.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:802244164633:android:df01d44dfcc8f5a17ebe88",
+        "mobilesdk_app_id": "1:YOUR_PROJECT_NUMBER:android:YOUR_APP_ID_HASH",
         "android_client_info": {
           "package_name": "com.mla.asktheelect"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyBlHz10nsF-10xc1tnFKCVp8ANxT48TWbM"
+          "current_key": "YOUR_API_KEY_FROM_FIREBASE"
         }
       ],
       "services": {

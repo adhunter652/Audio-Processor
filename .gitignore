@@ -37,6 +37,10 @@ rag_db.zip
 .env.local
 .env.*.local
 
+# Firebase / Google services (contains API keys; use *.example as template)
+**/google-services.json
+**/GoogleService-Info.plist
+
 # IDE / editor
 .idea/
 .vscode/

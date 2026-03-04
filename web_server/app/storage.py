@@ -11,24 +11,41 @@ from config import RAG_DIR
 logger = logging.getLogger("web_server.storage")
 
 
-def upload_rag_db_to_gcs(bucket_name: str, prefix: str = "rag_db") -> tuple[str | None, str | None]:
+def upload_rag_db_to_gcs(
+    bucket_name: str,
+    prefix: str = "rag_db",
+    progress_callback=None,
+) -> tuple[str | None, str | None]:
     """
     Zip RAG_DIR and upload to GCS. Returns (uploaded_path, latest_path) or (None, None).
+    progress_callback: optional callable(message: str) for progress updates during zip/upload.
     """
+    def progress(msg: str) -> None:
+        if progress_callback:
+            progress_callback(msg)
+        logger.info("upload_rag_db_to_gcs: %s", msg)
+
     if not RAG_DIR.exists() or not RAG_DIR.is_dir():
         logger.warning("upload_rag_db_to_gcs: RAG_DIR %s missing or not a directory", RAG_DIR)
+        if progress_callback:
+            progress_callback(f"RAG upload failed: RAG_DIR {RAG_DIR} missing or not a directory.")
         return None, None
     try:
         if not any(RAG_DIR.iterdir()):
             logger.warning("upload_rag_db_to_gcs: RAG_DIR is empty")
+            if progress_callback:
+                progress_callback("RAG upload failed: RAG directory is empty.")
             return None, None
     except OSError as e:
         logger.warning("upload_rag_db_to_gcs: cannot list RAG_DIR: %s", e)
+        if progress_callback:
+            progress_callback(f"RAG upload failed: cannot list RAG directory: {e}")
         return None, None
 
     tmpdir = None
     zip_path = None
     try:
+        progress("Zipping RAG…")
         tmpdir = Path(tempfile.mkdtemp(prefix="rag_upload_"))
         copy_dir = tmpdir / "rag_db"
         shutil.copytree(RAG_DIR, copy_dir)
@@ -38,6 +55,7 @@ def upload_rag_db_to_gcs(bucket_name: str, prefix: str = "rag_db") -> tuple[str 
                 if f.is_file():
                     zf.write(f, f.relative_to(copy_dir.parent))
 
+        progress("Uploading zip to GCS (this may take several minutes for large RAG)…")
         from google.cloud import storage
         client = storage.Client()
         bucket = client.bucket(bucket_name)
@@ -45,12 +63,16 @@ def upload_rag_db_to_gcs(bucket_name: str, prefix: str = "rag_db") -> tuple[str 
         object_name = f"{prefix.rstrip('/')}/rag_db_{timestamp}.zip"
         blob = bucket.blob(object_name)
         blob.upload_from_filename(str(zip_path), content_type="application/zip")
+        progress("Updating latest.zip in bucket…")
         latest_name = f"{prefix.rstrip('/')}/latest.zip"
         bucket.copy_blob(blob, bucket, latest_name)
         logger.info("upload_rag_db_to_gcs: uploaded %s and %s", object_name, latest_name)
         return object_name, latest_name
     except Exception as e:
+        msg = f"RAG upload failed: {e}"
         logger.exception("upload_rag_db_to_gcs failed: %s", e)
+        if progress_callback:
+            progress_callback(msg)
         return None, None
     finally:
         if zip_path and zip_path.exists():

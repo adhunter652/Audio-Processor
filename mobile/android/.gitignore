@@ -12,3 +12,6 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+
+# Firebase config (contains API key; copy from google-services.json.example and fill in)
+app/google-services.json

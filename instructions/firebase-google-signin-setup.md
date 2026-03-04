@@ -23,6 +23,7 @@ This document describes how to configure **Firebase** and **Google Sign-In** so 
    - Use the **Debug** SHA-1 from your machine (see [Troubleshooting: Error 10](#sign-in-error-10-apiexception-10) below), or run `cd mobile && .\gradlew.bat signingReport` (Windows) / `./gradlew signingReport` (macOS/Linux) and copy the SHA-1 from the `debug` variant.
 4. Download **google-services.json** and place it at:
    - `mobile/android/app/google-services.json`
+   - **Do not commit this file** — it is in `.gitignore`. Use `google-services.json.example` as a template if setting up on a new machine.
 5. Finish the wizard.
 
 ### iOS
@@ -128,6 +129,32 @@ If you build on a **different machine**, that machine has its own debug keystore
 | **Google Sign-In fails on iOS** | `GoogleService-Info.plist` in Runner target? Bundle ID matches Firebase? |
 | **Network/API errors** | Backend running? For emulator, using `10.0.2.2:8000` (Android) or `localhost:8000` (iOS sim)? |
 | **Missing firebase_options.dart** | Run `flutterfire configure` from the `mobile` directory. |
+
+---
+
+## Rotating the Firebase/Google API key (if exposed)
+
+If **google-services.json** (or its API key) was committed to a public repo:
+
+1. **Create a new API key**
+   - Open [Google Cloud Console](https://console.cloud.google.com/) and select your Firebase project (e.g. `ask-the-elect-bfa69`).
+   - Go to **APIs & Services** → **Credentials**.
+   - Click **+ CREATE CREDENTIALS** → **API key**. Copy the new key.
+   - (Optional but recommended) Restrict the key: **Application restrictions** → **Android apps**, add your package name and SHA-1.
+   - The new key is linked to the project in a few minutes.
+
+2. **Use the new key in your app**
+   - In [Firebase Console](https://console.firebase.google.com/) → Project **Settings** (gear) → **Your apps** → Android app, re-download **google-services.json**.
+   - If the downloaded file still has the old key, edit `mobile/android/app/google-services.json` and set `client[0].api_key[0].current_key` to the new API key from Cloud Console.
+   - Then in Cloud Console → **Credentials**, delete the old (compromised) API key so it stops working.
+
+3. **Stop tracking the secret file**
+   - Run: `git rm --cached mobile/android/app/google-services.json` (keeps the file on disk, removes it from Git).
+   - Commit the change. The file is in `.gitignore`, so it will not be re-added.
+   - Consider using [BFG or git filter-repo](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository) to remove the key from past commits if the repo is public and the key was truly sensitive.
+
+4. **Prevention**
+   - `google-services.json` and `GoogleService-Info.plist` are in `.gitignore`. Use `google-services.json.example` as a template; never commit the real file.
 
 ---
 

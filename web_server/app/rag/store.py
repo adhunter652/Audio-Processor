@@ -17,6 +17,10 @@ _chroma_meetings = None
 def _get_embedding_model():
     global _embedding_model
     if _embedding_model is None:
+        # Suppress verbose "LOAD REPORT" / UNEXPECTED key messages from transformers when loading
+        import logging
+        for _name in ("transformers", "sentence_transformers"):
+            logging.getLogger(_name).setLevel(logging.WARNING)
         from sentence_transformers import SentenceTransformer
         _embedding_model = SentenceTransformer(RAG_EMBEDDING_MODEL)
     return _embedding_model

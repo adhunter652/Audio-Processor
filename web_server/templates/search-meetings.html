@@ -12,9 +12,29 @@
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; font-family: 'DM Sans', system-ui, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
     .layout { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem; }
-    nav { margin-bottom: 1.5rem; display: flex; gap: 1rem; align-items: center; }
+    nav { margin-bottom: 1.5rem; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
     nav a { color: var(--text-muted); text-decoration: none; font-size: 0.9rem; }
     nav a:hover { color: var(--accent); }
+    nav .nav-sync { margin-left: auto; }
+    nav .nav-sync button { padding: 0.4rem 0.8rem; font-size: 0.9rem; background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-sm); cursor: pointer; }
+    nav .nav-sync button:hover { border-color: var(--accent); color: var(--accent); }
+    nav .nav-sync .badge { background: var(--accent); color: #fff; font-size: 0.75rem; padding: 0.15rem 0.4rem; border-radius: 999px; margin-left: 0.35rem; }
+    .sync-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: center; justify-content: center; }
+    .sync-modal.open { display: flex; }
+    .sync-modal .box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.5rem; max-width: 480px; width: 90%; max-height: 80vh; overflow: hidden; display: flex; flex-direction: column; }
+    .sync-modal .box h3 { margin: 0 0 1rem; font-size: 1.1rem; }
+    .sync-modal .sync-log { flex: 1; min-height: 120px; max-height: 220px; overflow-y: auto; padding: 0.75rem; background: var(--bg); border-radius: var(--radius-sm); font-size: 0.85rem; white-space: pre-wrap; word-break: break-word; }
+    .sync-modal .sync-log .line.result { color: var(--accent); font-weight: 500; }
+    .sync-modal .actions { margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center; }
+    .sync-modal button.syncing { opacity: 0.8; pointer-events: none; }
+    .sync-modal button.syncing::after { content: ''; display: inline-block; width: 1em; height: 1em; margin-left: 0.5em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .player-bar { padding: 0.75rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 1rem; }
+    .player-bar .label { font-size: 0.9rem; color: var(--text-muted); margin-bottom: 0.35rem; }
+    audio { width: 100%; }
+    .meeting-card .play-btn { margin-top: 0.35rem; padding: 0.25rem 0.5rem; font-size: 0.8rem; background: var(--accent); color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+    .meeting-card .play-btn:hover { background: var(--accent-dim); }
+    .meeting-card.playing { border-color: var(--accent); background: rgba(167, 139, 250, 0.08); }
     h1 { font-size: 1.75rem; font-weight: 700; margin: 0 0 0.5rem; }
     .subtitle { color: var(--text-muted); font-size: 0.95rem; margin-bottom: 1.5rem; }
     .search-row { display: flex; gap: 0.75rem; margin-bottom: 1.5rem; }
@@ -49,14 +69,31 @@
 <body>
   <div class="layout">
     <nav>
-      <a href="/">Home</a>
       <a href="/search/transcripts">Search transcripts</a>
       <a href="/search/meetings">Search meetings</a>
+      <span class="nav-sync">
+        <button type="button" id="navSyncBtn">Sync RAG / Index</button>
+        <span class="badge" id="navSyncBadge" style="display: none;"></span>
+      </span>
     </nav>
+    <div class="sync-modal" id="syncModal" aria-hidden="true">
+      <div class="box">
+        <h3>Sync RAG &amp; index new outputs</h3>
+        <div class="sync-log" id="syncLog" role="log"></div>
+        <div class="actions">
+          <button type="button" id="syncRunBtn">Run sync</button>
+          <button type="button" id="syncCloseBtn">Close</button>
+        </div>
+      </div>
+    </div>
     <h1>Search meetings</h1>
-    <p class="subtitle">Search by main topic. Click a meeting to view full processing results.</p>
+    <p class="subtitle">Search by main topic. Click a meeting to view details, or use Play to listen. When one finishes, the next in the list will play.</p>
 
     <div id="searchView">
+      <div class="player-bar" id="playerBar" style="display: none;">
+        <div class="label" id="playerLabel">Playing</div>
+        <audio id="globalAudio" controls preload="metadata"></audio>
+      </div>
       <div class="search-row">
         <input type="search" id="query" placeholder="e.g. product launch, Q4 planning" />
         <button type="button" id="searchBtn">Search</button>
@@ -84,6 +121,36 @@
     const detailPanel = document.getElementById('detailPanel');
     const backLink = document.getElementById('backLink');
     const folderFilters = document.getElementById('folderFilters');
+    const playerBar = document.getElementById('playerBar');
+    const playerLabel = document.getElementById('playerLabel');
+    const globalAudio = document.getElementById('globalAudio');
+
+    let currentMeetingResults = [];
+    let currentPlayIndex = -1;
+
+    function playMeetingAt(jobId, index) {
+      currentPlayIndex = index;
+      globalAudio.src = API + '/api/audio/' + encodeURIComponent(jobId);
+      const name = (currentMeetingResults[index] && currentMeetingResults[index].original_filename) || jobId;
+      playerLabel.textContent = 'Playing: ' + name;
+      playerBar.style.display = 'block';
+      globalAudio.play().catch(function() {});
+      resultsEl.querySelectorAll('.meeting-card').forEach((card, i) => {
+        card.classList.toggle('playing', i === index);
+      });
+    }
+
+    globalAudio.addEventListener('ended', () => {
+      if (currentMeetingResults.length === 0 || currentPlayIndex < 0) return;
+      const next = currentPlayIndex + 1;
+      if (next < currentMeetingResults.length) {
+        const nextMeeting = currentMeetingResults[next];
+        playMeetingAt(nextMeeting.job_id, next);
+      } else {
+        currentPlayIndex = -1;
+        resultsEl.querySelectorAll('.meeting-card').forEach(c => c.classList.remove('playing'));
+      }
+    });
 
     async function loadFolders() {
       try {
@@ -147,20 +214,44 @@
       const fidsParam = fids.length ? '&folder_ids=' + encodeURIComponent(fids.join(',')) : '';
       try {
         const r = await fetch(API + '/api/search/meetings?q=' + encodeURIComponent(q) + fidsParam);
-        const data = await r.json();
+        const contentType = r.headers.get('content-type') || '';
+        const isJson = contentType.includes('application/json');
+        const text = await r.text();
+        if (!r.ok) {
+          let msg = r.status + ' ' + r.statusText;
+          if (isJson) try { const err = JSON.parse(text); msg = err.detail || err.message || msg; } catch (_) {}
+          else if (text) msg = text.slice(0, 200);
+          resultsEl.innerHTML = '<p class="empty">Search failed: ' + escapeHtml(msg) + '</p>';
+          return;
+        }
+        const data = isJson ? JSON.parse(text) : { results: [] };
         const results = data.results || [];
         if (results.length === 0) {
           resultsEl.innerHTML = '<p class="empty">No meetings found.</p>';
           return;
         }
-        resultsEl.innerHTML = results.map(m => `
-          <div class="meeting-card" data-job-id="${escapeHtml(m.job_id)}">
+        currentMeetingResults = results;
+        resultsEl.innerHTML = results.map((m, idx) => `
+          <div class="meeting-card" data-job-id="${escapeHtml(m.job_id)}" data-index="${idx}">
             <div class="name">${escapeHtml(m.original_filename || m.job_id)}</div>
             <div class="topic">${escapeHtml(m.main_topic || '')}</div>
+            <button type="button" class="play-btn" data-job-id="${escapeHtml(m.job_id)}">Play</button>
           </div>
         `).join('');
         resultsEl.querySelectorAll('.meeting-card').forEach(card => {
-          card.addEventListener('click', () => showMeetingDetail(card.getAttribute('data-job-id')));
+          card.addEventListener('click', (e) => {
+            if (e.target.classList.contains('play-btn')) return;
+            showMeetingDetail(card.getAttribute('data-job-id'));
+          });
+        });
+        resultsEl.querySelectorAll('.play-btn').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const jobId = btn.getAttribute('data-job-id');
+            const card = btn.closest('.meeting-card');
+            const idx = parseInt(card.getAttribute('data-index'), 10);
+            playMeetingAt(jobId, idx);
+          });
         });
       } catch (e) {
         resultsEl.innerHTML = '<p class="empty">Search failed: ' + escapeHtml(e.message) + '</p>';
@@ -204,7 +295,97 @@
       searchView.style.display = 'block';
     });
 
+    async function loadIndexStatus() {
+      try {
+        const r = await fetch(API + '/api/index/status');
+        const data = await r.json();
+        const n = data.pending_count || 0;
+        const badge = document.getElementById('navSyncBadge');
+        if (n > 0) { badge.style.display = 'inline'; badge.textContent = n; } else { badge.style.display = 'none'; }
+      } catch (_) {}
+    }
+    function openSyncModal() {
+      document.getElementById('syncModal').classList.add('open');
+      document.getElementById('syncModal').setAttribute('aria-hidden', 'false');
+    }
+    function closeSyncModal() {
+      document.getElementById('syncModal').classList.remove('open');
+      document.getElementById('syncModal').setAttribute('aria-hidden', 'true');
+    }
+    async function runSync() {
+      const btn = document.getElementById('syncRunBtn');
+      const logEl = document.getElementById('syncLog');
+      btn.disabled = true;
+      btn.classList.add('syncing');
+      logEl.innerHTML = '';
+      function addLog(msg, isResult) {
+        const line = document.createElement('div');
+        line.className = 'line' + (isResult ? ' result' : '');
+        line.textContent = msg;
+        logEl.appendChild(line);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+      try {
+        const r = await fetch(API + '/api/sync', { method: 'POST' });
+        if (!r.ok || !r.body) {
+          addLog('Request failed: ' + (r.statusText || r.status), true);
+          return;
+        }
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          buf += decoder.decode(chunk.value, { stream: true });
+          const parts = buf.split('\n\n');
+          buf = parts.pop() || '';
+          for (let i = 0; i < parts.length; i++) {
+            const dataLine = parts[i].split('\n').find(l => l.startsWith('data: '));
+            if (!dataLine) continue;
+            try {
+              const data = JSON.parse(dataLine.slice(6));
+              if (data.type === 'progress') addLog(data.message, false);
+              else if (data.type === 'result') {
+                if (data.ok) {
+                  const parts2 = [];
+                  if (data.restored) parts2.push('RAG restored from bucket');
+                  parts2.push(data.newly_indexed + ' job(s) newly indexed');
+                  if (data.errors && data.errors.length) parts2.push(data.errors.length + ' error(s)');
+                  addLog('Done: ' + parts2.join('. '), true);
+                } else addLog('Error: ' + (data.error || 'Unknown error'), true);
+              }
+            } catch (_) {}
+          }
+        }
+        if (buf) {
+          const dataLine = buf.split('\n').find(l => l.startsWith('data: '));
+          if (dataLine) {
+            try {
+              const data = JSON.parse(dataLine.slice(6));
+              if (data.type === 'progress') addLog(data.message, false);
+              else if (data.type === 'result' && data.ok) addLog('Done.', true);
+              else if (data.type === 'result' && !data.ok) addLog('Error: ' + (data.error || 'Unknown'), true);
+            } catch (_) {}
+          }
+        }
+        await loadIndexStatus();
+      } catch (e) {
+        addLog('Request failed: ' + e.message, true);
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove('syncing');
+      }
+    }
+    document.getElementById('navSyncBtn').addEventListener('click', openSyncModal);
+    document.getElementById('syncCloseBtn').addEventListener('click', closeSyncModal);
+    document.getElementById('syncRunBtn').addEventListener('click', runSync);
+    document.getElementById('syncModal').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('syncModal')) closeSyncModal();
+    });
+
     loadFolders();
+    loadIndexStatus();
     searchBtn.addEventListener('click', doSearch);
     queryEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
   </script>

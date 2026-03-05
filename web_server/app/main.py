@@ -4,13 +4,15 @@ import json
 import logging
 from pathlib import Path
 
+from contextlib import asynccontextmanager
 from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from config import BASE_DIR, GCS_OUTPUT_BUCKET, GCS_SIGNING_KEY_JSON, RAG_SEARCH_LIMIT
 from app.folders import list_folders
 from app.rag import search_transcript_segments, search_meetings
-from app.sync import ensure_rag_synced_with_bucket
+from app.sync import ensure_rag_synced_with_bucket, get_pending_index_count
+from app.storage import restore_rag_from_gcs
 
 logger = logging.getLogger("web_server")
 
@@ -30,6 +32,35 @@ def _gcs_client_for_signing():
     return storage.Client(credentials=creds, project=info.get("project_id"))
 
 
+def _startup_sync_rag_from_bucket():
+    """On startup: restore RAG from bucket if rag_db/latest.zip exists (no indexing)."""
+    if not GCS_OUTPUT_BUCKET:
+        return
+    try:
+        from google.cloud import storage
+        bucket = storage.Client().bucket(GCS_OUTPUT_BUCKET)
+        blob = bucket.blob("rag_db/latest.zip")
+        if blob.exists():
+            logger.info("Startup: restoring RAG from bucket (rag_db/latest.zip)")
+            if restore_rag_from_gcs(GCS_OUTPUT_BUCKET, "rag_db/latest.zip"):
+                logger.info("Startup: RAG restored from bucket")
+            else:
+                logger.warning("Startup: RAG restore failed")
+        else:
+            logger.info("Startup: no RAG in bucket; starting fresh")
+    except Exception as e:
+        logger.warning("Startup: could not restore RAG from bucket: %s", e)
+
+
+@asynccontextmanager
+async def _lifespan(app):
+    """Run startup sync of RAG from bucket in a thread so the server can start quickly."""
+    loop = asyncio.get_event_loop()
+    await asyncio.to_thread(_startup_sync_rag_from_bucket)
+    yield
+    # shutdown: nothing to do
+
+
 def create_app():
     global _app
     if _app is not None:
@@ -37,7 +68,11 @@ def create_app():
     from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
 
-    _app = FastAPI(title="Search – Audio Results", description="Search transcript and meeting results from the output bucket")
+    _app = FastAPI(
+        title="Search – Audio Results",
+        description="Search transcript and meeting results from the output bucket",
+        lifespan=_lifespan,
+    )
     _app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -76,9 +111,13 @@ def create_app():
     ):
         if not q or not q.strip():
             return {"results": []}
-        fids = _parse_folder_ids(folder_ids)
-        results = search_transcript_segments(q.strip(), limit=limit, folder_ids=fids)
-        return {"results": results}
+        try:
+            fids = _parse_folder_ids(folder_ids)
+            results = search_transcript_segments(q.strip(), limit=limit, folder_ids=fids)
+            return {"results": results}
+        except Exception as e:
+            logger.exception("Transcript search failed: %s", e)
+            raise HTTPException(500, detail=f"Search failed: {str(e)}")
 
     @_app.get("/api/search/meetings")
     async def api_search_meetings(
@@ -88,9 +127,13 @@ def create_app():
     ):
         if not q or not q.strip():
             return {"results": []}
-        fids = _parse_folder_ids(folder_ids)
-        results = search_meetings(q.strip(), limit=limit, folder_ids=fids)
-        return {"results": results}
+        try:
+            fids = _parse_folder_ids(folder_ids)
+            results = search_meetings(q.strip(), limit=limit, folder_ids=fids)
+            return {"results": results}
+        except Exception as e:
+            logger.exception("Meeting search failed: %s", e)
+            raise HTTPException(500, detail=f"Search failed: {str(e)}")
 
     # ----- Result & audio from bucket -----
     @_app.get("/api/result/{job_id}")
@@ -190,14 +233,21 @@ def create_app():
             return {"status": "never_run"}
         return {"status": "complete", "result": _sync_last_result}
 
+    @_app.get("/api/index/status")
+    async def api_index_status():
+        """Return count of completed outputs in bucket that are not yet indexed (for showing Index button)."""
+        try:
+            pending = get_pending_index_count()
+            return {"pending_count": pending}
+        except Exception as e:
+            logger.exception("Index status failed: %s", e)
+            return {"pending_count": 0}
+
     # ----- Search pages -----
-    @_app.get("/", response_class=HTMLResponse)
+    @_app.get("/")
     async def index():
-        """Landing: redirect to search transcripts or serve simple search hub."""
-        html_path = BASE_DIR / "templates" / "index.html"
-        if html_path.exists():
-            return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
-        return HTMLResponse(content="<html><body><h1>Search</h1><a href='/search/transcripts'>Search transcripts</a> | <a href='/search/meetings'>Search meetings</a></body></html>")
+        """Default page: redirect to search transcripts."""
+        return RedirectResponse(url="/search/transcripts", status_code=302)
 
     @_app.get("/search/transcripts", response_class=HTMLResponse)
     async def page_search_transcripts():

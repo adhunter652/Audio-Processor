@@ -107,6 +107,33 @@ def _merge_new_jobs_from_bucket(progress_callback=None):
     return newly_indexed, errors
 
 
+def get_pending_index_count() -> int:
+    """
+    Return the number of completed jobs in the bucket that are not yet indexed.
+    Does not perform any indexing; used to show "Index" button when there is work to do.
+    """
+    if not GCS_OUTPUT_BUCKET:
+        return 0
+    from google.cloud import storage
+    prefix = "job_state/"
+    bucket = storage.Client().bucket(GCS_OUTPUT_BUCKET)
+    indexed_ids = _load_indexed_job_ids()
+    blobs = list(bucket.list_blobs(prefix=prefix))
+    job_blobs = [b for b in blobs if b.name.endswith(".json")]
+    count = 0
+    for blob in job_blobs:
+        job_id = blob.name[len(prefix) : -5]
+        if not job_id or job_id in indexed_ids:
+            continue
+        try:
+            data = json.loads(blob.download_as_string().decode("utf-8"))
+        except Exception:
+            continue
+        if data.get("status") == "completed":
+            count += 1
+    return count
+
+
 def ensure_rag_synced_with_bucket(progress_callback=None) -> tuple[bool, int, list[str]]:
     """
     On startup: restore RAG from bucket if rag_db/latest.zip exists; then merge any new completed

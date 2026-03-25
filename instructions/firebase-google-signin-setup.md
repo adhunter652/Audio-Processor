@@ -108,12 +108,12 @@ This means the **SHA-1 fingerprint** of the keystore used to sign your app is **
 5. **Re-download** `google-services.json`: same page → **Download google-services.json**. Replace `mobile/android/app/google-services.json` with it (the new file will include `oauth_client` entries; without this, Sign-In can still fail with error 10).
 6. Save and wait 1–2 minutes, then do a **clean run**: `flutter clean && flutter pub get && flutter run`. Try signing in again.
 
-**Fingerprints for this project** (from the keystores created for this app). In Firebase → Project settings → Android app (`com.mla.asktheelect`) → **Add fingerprint**, add at least the **Debug** SHA-1 when using `flutter run` (emulator or physical device).
+**Fingerprints:** Do not paste real SHA-1/SHA-256 values into this repo. For your machine, run from `mobile`:
 
-| Build    | SHA-1 | SHA-256 |
-|----------|--------|--------|
-| **Debug**   | `F7:B3:C4:08:65:8B:D2:6F:E0:F6:FC:C1:F4:BD:EA:EF:7B:7A:A8:04` | `34:E3:CE:69:4B:DD:69:5E:6D:12:47:57:87:D2:56:F0:AF:B1:17:5B:1B:CD:96:F5:3E:7C:47:C5:C6:5F:8C:4C` |
-| **Release** | `BC:E8:C5:7C:6F:BE:F2:CD:6D:AE:3E:22:D8:4F:9D:92:EA:C1:1B:0D` | `3D:79:21:BF:4F:66:F9:AE:CD:3F:C2:12:AF:79:56:72:73:5D:68:D0:EA:5C:87:50:3F:6E:8E:E6:B5:6A:25:D1` |
+- Debug: `.\get-sha1-debug.ps1` (or `.\gradlew.bat :app:signingReport` if Gradle works on your JDK).
+- Release: use your release keystore script or `keytool -list -v` on the keystore you use for Play builds.
+
+In Firebase → Project settings → Android app (`com.mla.asktheelect`) → **Add fingerprint**, add at least the **Debug** SHA-1 when using `flutter run` (emulator or physical device).
 
 - **Debug** (e.g. `flutter run` on emulator or **physical device**): add the **Debug** SHA-1 (and optionally SHA-256). The app is signed with the debug keystore on the machine where you run `flutter run`.
 - **Release**: add the **Release** SHA-1 when building for Play Store.
